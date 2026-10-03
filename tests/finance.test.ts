@@ -137,3 +137,29 @@ test("dates and chart totals stay in their selected month", () => {
     0,
   );
 });
+
+test("receipt inputs reject disguised files, unsupported types and oversized PDF", async () => {
+  const { prepareReceipt, RECEIPT_LIMIT } = await import("../src/lib/receipts");
+  await assert.rejects(
+    prepareReceipt(
+      new File(["<script>x</script>"], "evil.svg", { type: "image/svg+xml" }),
+    ),
+    /JPEG/,
+  );
+  await assert.rejects(
+    prepareReceipt(
+      new File(["not a pdf"], "fake.pdf", { type: "application/pdf" }),
+    ),
+    /içeriği/,
+  );
+  const large = new Uint8Array(RECEIPT_LIMIT + 1);
+  large.set(new TextEncoder().encode("%PDF-1.4"));
+  await assert.rejects(
+    prepareReceipt(new File([large], "big.pdf", { type: "application/pdf" })),
+    /2 MB/,
+  );
+  const pdf = new File(["%PDF-1.4\n%%EOF"], "receipt.pdf", {
+    type: "application/pdf",
+  });
+  assert.equal((await prepareReceipt(pdf)).size, pdf.size);
+});

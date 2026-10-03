@@ -1,7 +1,8 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Download, RotateCcw } from "lucide-react";
 import { useData, errorMessage } from "./data-provider";
+import { useTransactionPage } from "./business-hooks";
 import { Field, EmptyState } from "./ui";
 import {
   currentMonth,
@@ -13,7 +14,9 @@ import {
   dateLabel,
 } from "@/lib/finance";
 export function ExcelExport({ month }: { month: string }) {
-  const { data, notify } = useData();
+  const { data, notify, businessReady, demo } = useData();
+  const guard = useRef(false);
+  const [format, setFormat] = useState("xlsx");
   const [open, setOpen] = useState(false),
     [start, setStart] = useState(`${month}-01`),
     [end, setEnd] = useState(monthEnd(month)),
@@ -25,17 +28,29 @@ export function ExcelExport({ month }: { month: string }) {
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (guard.current) return;
+    guard.current = true;
     setBusy(true);
     setError("");
     try {
-      await (
-        await import("@/lib/excel-download")
-      ).downloadReport(data, start, end);
-      notify("Excel raporu indirildi.");
+      const { exportData, downloadCSV } = await import("@/lib/export-data");
+      const selected = await exportData(
+        data,
+        start,
+        end,
+        businessReady && !demo,
+      );
+      if (format === "csv") downloadCSV(selected, start, end);
+      else
+        await (
+          await import("@/lib/excel-download")
+        ).downloadReport(selected, start, end);
+      notify(format === "csv" ? "CSV indirildi." : "Excel raporu indirildi.");
       setOpen(false);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      guard.current = false;
       setBusy(false);
     }
   }
@@ -80,6 +95,12 @@ export function ExcelExport({ month }: { month: string }) {
               />
             </Field>
           </div>
+          <Field label="Dosya biçimi">
+            <select value={format} onChange={(e) => setFormat(e.target.value)}>
+              <option value="xlsx">Excel · 5 düzenli sayfa</option>
+              <option value="csv">CSV · İşlemler</option>
+            </select>
+          </Field>
           {error && (
             <p role="alert" className="form-error">
               {error}
@@ -187,9 +208,11 @@ export function OpeningBalance() {
   );
 }
 export function Trash() {
-  const { trash, restore, data, notify } = useData();
+  const { restore, data, notify } = useData();
+  const page = useTransactionPage({ trash: true });
+  const trash = page.rows;
   const [busy, setBusy] = useState("");
-  const [visible, setVisible] = useState(40);
+
   async function recover(id: string) {
     setBusy(id);
     try {
@@ -204,9 +227,18 @@ export function Trash() {
     <section className="panel">
       <div className="section-heading">
         <h2>Silinen İşlemler</h2>
-        <span className="small muted">{trash.length} kayıt</span>
+        <span className="small muted">{page.count} kayıt</span>
       </div>
-      {!trash.length ? (
+      {page.error ? (
+        <p role="alert" className="form-error">
+          {page.error}
+          <button className="text-button" onClick={page.reload}>
+            Yeniden dene
+          </button>
+        </p>
+      ) : page.loading && !trash.length ? (
+        <div className="skeleton compact-skeleton" />
+      ) : !trash.length ? (
         <EmptyState
           title="Silinen işlem yok"
           text="Sildiğiniz işlemler burada saklanır; istediğiniz zaman geri yükleyebilirsiniz."
@@ -217,7 +249,7 @@ export function Trash() {
             .sort((a, b) =>
               (b.deleted_at || "").localeCompare(a.deleted_at || ""),
             )
-            .slice(0, visible)
+            .slice(0, trash.length)
             .map((t) => (
               <div key={t.id} className="trash-row">
                 <div>
@@ -243,10 +275,11 @@ export function Trash() {
                 </button>
               </div>
             ))}
-          {trash.length > visible && (
+          {page.hasMore && (
             <button
               className="button secondary"
-              onClick={() => setVisible((n) => n + 40)}
+              disabled={page.loading}
+              onClick={page.more}
             >
               Daha fazla göster
             </button>

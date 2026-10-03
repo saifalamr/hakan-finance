@@ -123,11 +123,10 @@ export function reportRows(data: Data, start: string, end: string) {
     });
   const last = Math.max(6, tx.length + 5),
     total = totals(transactions);
-  const balance = cashBalance(
-    data.finance_settings?.[0],
-    data.transactions,
-    end,
-  );
+  const balance =
+    data.export_context?.end === end
+      ? data.export_context.balance
+      : cashBalance(data.finance_settings?.[0], data.transactions, end);
   const summary: Cell[][] = [
     [
       "Toplam Gelir",

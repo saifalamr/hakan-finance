@@ -15,10 +15,11 @@ import {
   emptyData,
   currentMonth,
 } from "@/lib/finance";
+import { type Snapshot, localSnapshot } from "@/lib/business";
 import { demoAllowed, supabase } from "@/lib/supabase";
 import { demoUser, makeDemo } from "@/lib/demo";
 import type { PostgrestError } from "@supabase/supabase-js";
-export type Table = keyof Data;
+export type Table = Exclude<keyof Data, "export_context">;
 type RecordInput = Record<string, string | number | null>;
 type Store = {
   data: Data;
@@ -29,7 +30,15 @@ type Store = {
   loadError: string;
   demo: boolean;
   refresh: () => Promise<void>;
-  save: (table: Table, values: RecordInput, id?: string) => Promise<void>;
+  save: (
+    table: Table,
+    values: RecordInput,
+    id?: string,
+    requestId?: string,
+  ) => Promise<string>;
+  businessReady: boolean;
+  revision: number;
+  getSnapshot: (month: string) => Promise<Snapshot>;
   remove: (table: Table, id: string) => Promise<void>;
   startDemo: () => void;
   signOut: () => Promise<void>;
@@ -52,8 +61,22 @@ export function errorMessage(error: unknown): string {
     e?.details?.includes("TimeoutError")
   )
     return "Bağlantı zaman aşımına uğradı. Tekrar kaydetmeden önce yenileyip kaydın oluşup oluşmadığını kontrol edin.";
+  if (
+    e?.message?.includes("vehicle_archived") ||
+    e?.message?.includes("employee_archived")
+  )
+    return "Arşivlenmiş bir kayda yeni işlem eklenemez. Önce yeniden aktif edin.";
+  if (e?.message?.includes("recurring_not_due"))
+    return "Bu giderin tarihi henüz gelmedi veya daha önce kaydedildi. Yenileyin.";
+  if (e?.message?.includes("invalid_receipt_path"))
+    return "Belge bağlantısı geçersiz. Dosyayı yeniden seçin.";
+  if (
+    e?.message?.includes("new row violates row-level security policy") &&
+    "statusCode" in e
+  )
+    return "Belge yüklenemedi. Dosya ve alan sınırlarını veya yönetici erişimini kontrol edin.";
   if (e?.code === "23503")
-    return "Bu kayıt işlemlerde kullanılıyor. Önce bağlı işlemleri kaldırın.";
+    return "Bağlı kayıtlar nedeniyle bu işlem yapılamıyor. Geçmiş kayıtlar korunur.";
   if (e?.code === "23505") return "Bu kayıt zaten mevcut.";
   if (e?.code === "42501")
     return "Bu işlem için yetkiniz yok. Yönetici hesabını kontrol edin.";
@@ -100,7 +123,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [demo, setDemo] = useState(false),
     [toast, setToast] = useState(""),
     [upgradeReady, setUpgradeReady] = useState(false),
-    [lastDeleted, setLastDeleted] = useState("");
+    [lastDeleted, setLastDeleted] = useState(""),
+    [businessReady, setBusinessReady] = useState(false),
+    [revision, setRevision] = useState(0);
+  const demoData = useRef(data);
+  const snapshots = useRef(new Map<string, Promise<Snapshot>>());
   const sequence = useRef(0);
   const authSequence = useRef(0);
   const authenticatedUser = useRef("");
@@ -140,6 +167,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
           "categories",
           "employee_periods",
         ];
+        let business = false;
+        try {
+          const { data: summary, error } = await supabase!
+            .rpc("finance_summary", { p_month: currentMonth() + "-01" })
+            .abortSignal(controller.signal);
+          if (error && !["PGRST202", "42883"].includes(error.code)) throw error;
+          if (!error && summary?.month) {
+            business = true;
+            snapshots.current.set(
+              currentMonth(),
+              Promise.resolve(summary as Snapshot),
+            );
+          }
+        } catch (error) {
+          throw error;
+        }
         const settingsPromise = readAll(
           "finance_settings",
           userId,
@@ -153,16 +196,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
           });
         const [rows, settings] = await Promise.all([
           Promise.all(
-            tables.map((table) => readAll(table, userId, controller.signal)),
+            tables.map(async (table) => {
+              if (!business) return readAll(table, userId, controller.signal);
+              if (table === "transactions") {
+                const { data: page, error } = await supabase!
+                  .rpc("finance_transactions", { p_limit: 40 })
+                  .abortSignal(controller.signal);
+                if (error) throw error;
+                const { data: trash, error: trashError } = await supabase!
+                  .rpc("finance_transactions", { p_limit: 40, p_trash: true })
+                  .abortSignal(controller.signal);
+                if (trashError) throw trashError;
+                return [...page.rows.slice(0, 40), ...trash.rows.slice(0, 40)];
+              }
+              if (table === "employee_periods") {
+                const { data: periods, error } = await supabase!
+                  .from(table)
+                  .select("*")
+                  .eq("user_id", userId)
+                  .eq("month", currentMonth() + "-01")
+                  .abortSignal(controller.signal);
+                if (error) throw error;
+                return periods || [];
+              }
+              return readAll(table, userId, controller.signal);
+            }),
           ),
           settingsPromise,
         ]);
         if (sequence.current === run) {
+          setBusinessReady(business);
+          let recurring: unknown[] = [];
+          if (business)
+            recurring = await readAll(
+              "recurring_expenses",
+              userId,
+              controller.signal,
+            );
+          if (sequence.current !== run) return;
           setUpgradeReady(settings.upgraded);
           setData({
             ...Object.fromEntries(tables.map((table, i) => [table, rows[i]])),
             finance_settings: settings.rows,
+            recurring_expenses: recurring,
           } as Data);
+          setRevision((n) => n + 1);
           setLoaded(true);
         }
       } catch (error) {
@@ -250,6 +328,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [userId, demo, refresh]);
   function persist(next: Data) {
+    demoData.current = next;
+    snapshots.current.clear();
+    setRevision((n) => n + 1);
     localStorage.setItem(DEMO_KEY, JSON.stringify(next));
     setData(next);
   }
@@ -262,24 +343,34 @@ export function DataProvider({ children }: { children: ReactNode }) {
     } catch {
       /* Reset invalid development data. */
     }
+    snapshots.current.clear();
+    setBusinessReady(true);
     setDemo(true);
     setUpgradeReady(true);
     setLoaded(true);
     setUserId(demoUser);
     setReady(true);
     setLoadError("");
-    setData(stored || makeDemo());
+    demoData.current = stored || makeDemo();
+    setData(demoData.current);
   }
-  async function save(table: Table, values: RecordInput, id?: string) {
+  async function save(
+    table: Table,
+    values: RecordInput,
+    id?: string,
+    requestId?: string,
+  ) {
     if (!userId) throw new Error("Lütfen giriş yapın.");
     if (demo) {
-      const next = structuredClone(data);
+      const next = structuredClone(demoData.current);
       const record = {
         ...values,
         user_id: userId,
-        id: id || crypto.randomUUID(),
+        id: id || requestId || crypto.randomUUID(),
       };
       const rows = (next[table] ||= []) as unknown as RecordInput[];
+      if (!id && requestId && rows.some((r) => r.id === requestId))
+        return requestId;
       if (table === "finance_settings") {
         rows.splice(0, rows.length, record);
       } else if (table === "employee_periods") {
@@ -308,7 +399,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           work_days: values.work_days as number,
         });
       persist(next);
-      return;
+      return record.id as string;
     }
     if (writing.current)
       throw new Error("Önceki kayıt tamamlanıyor. Lütfen bekleyin.");
@@ -330,12 +421,38 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 )
             : id
               ? supabase!.from(table).update(values).eq("id", id)
-              : supabase!.from(table).insert({ ...values, user_id: userId });
-      const { data: saved, error } = await query.select("*");
+              : supabase!.from(table).insert({
+                  ...values,
+                  user_id: userId,
+                  ...(requestId ? { id: requestId } : {}),
+                  ...(businessReady && table === "transactions" && requestId
+                    ? { client_request_id: requestId }
+                    : {}),
+                });
+      let { data: saved, error } = await query.select("*");
+      if (error?.code === "23505" && requestId && !id) {
+        const existing = await supabase!
+          .from(table)
+          .select("*")
+          .eq("id", requestId)
+          .eq("user_id", owner);
+        if (existing.data?.length) {
+          if (
+            Object.entries(values).some(
+              ([key, value]) => existing.data![0][key] !== value,
+            )
+          )
+            throw new Error(
+              "Önceki kayıt kaydedilmiş. Yenileyip mevcut kaydı düzenleyin.",
+            );
+          saved = existing.data;
+          error = null;
+        }
+      }
       if (error) throw error;
       if (!saved?.length)
         throw new Error("Kayıt kaydedilemedi. Yetkinizi kontrol edin.");
-      if (authenticatedUser.current !== owner) return;
+      if (authenticatedUser.current !== owner) return saved[0].id;
       setData((previous) => {
         const next = { ...previous };
         const ids = new Set(saved.map((row) => row.id));
@@ -353,7 +470,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           .select("*")
           .eq("employee_id", saved[0].id)
           .eq("user_id", owner);
-        if (authenticatedUser.current !== owner) return;
+        if (authenticatedUser.current !== owner) return saved[0].id;
         if (periodError)
           setLoadError(
             "Personel kaydedildi. Maaş planını görmek için yenileyin.",
@@ -369,6 +486,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             ],
           }));
       }
+      snapshots.current.clear();
+      setRevision((n) => n + 1);
+      return saved[0].id as string;
     } finally {
       writing.current = false;
     }
@@ -383,6 +503,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setLastDeleted(id);
       return;
     }
+    if (table === "vehicles" || table === "employees") {
+      if (!businessReady)
+        throw new Error("Arşivleme için veritabanı güncellemesini tamamlayın.");
+      await save(table, { archived_at: new Date().toISOString() }, id);
+      return;
+    }
     if (demo) {
       if (
         data.transactions.some(
@@ -391,14 +517,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         )
       )
         throw new Error(
-          "Bu kayıt işlemlerde kullanılıyor. Önce bağlı işlemleri kaldırın.",
+          "Bağlı kayıtlar nedeniyle bu işlem yapılamıyor. Geçmiş kayıtlar korunur.",
         );
-      const next = structuredClone(data);
+      const next = structuredClone(demoData.current);
       next[table] = (next[table] || []).filter((row) => row.id !== id) as never;
-      if (table === "employees")
-        next.employee_periods = next.employee_periods.filter(
-          (p) => p.employee_id !== id,
-        );
+
       persist(next);
       return;
     }
@@ -419,11 +542,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setData((previous) => ({
         ...previous,
         [table]: (previous[table] || []).filter((row) => row.id !== id),
-        employee_periods:
-          table === "employees"
-            ? previous.employee_periods.filter((p) => p.employee_id !== id)
-            : previous.employee_periods,
       }));
+      snapshots.current.clear();
+      setRevision((n) => n + 1);
       setLoadError("");
     } finally {
       writing.current = false;
@@ -445,11 +566,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setUserId("");
     setData(emptyData);
     setLastDeleted("");
+    snapshots.current.clear();
+    setBusinessReady(false);
     setUpgradeReady(false);
     setDemo(false);
     setLoaded(false);
     setLoadError("");
   }
+  const getSnapshot = useCallback(
+    async (month: string): Promise<Snapshot> => {
+      if (demo || !businessReady) return localSnapshot(data, month);
+      if (snapshots.current.has(month)) return snapshots.current.get(month)!;
+      const promise = (async () => {
+        const { data: result, error } = await supabase!.rpc("finance_summary", {
+          p_month: month + "-01",
+        });
+        if (error) throw error;
+        return result as Snapshot;
+      })();
+      snapshots.current.set(month, promise);
+      if (snapshots.current.size > 4)
+        snapshots.current.delete(snapshots.current.keys().next().value!);
+      try {
+        return await promise;
+      } catch (error) {
+        snapshots.current.delete(month);
+        throw error;
+      }
+    },
+    [data, demo, businessReady],
+  );
   const activeData = useMemo(
     () => ({
       ...data,
@@ -465,6 +611,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     <Context.Provider
       value={{
         data: activeData,
+        businessReady,
+        revision,
+        getSnapshot,
         trash,
         upgradeReady,
         lastDeleted,

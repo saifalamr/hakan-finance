@@ -32,7 +32,7 @@ export async function downloadReport(data: Data, start: string, end: string) {
         data: {
           ...data,
           transactions: data.transactions.filter(
-            (t) => !t.deleted_at && t.date <= end,
+            (t) => !t.deleted_at && t.date.slice(0, 7) <= end.slice(0, 7),
           ),
         },
         start,

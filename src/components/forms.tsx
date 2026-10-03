@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useState, useRef, type FormEvent } from "react";
 import { ChevronDown, Trash2 } from "lucide-react";
 import {
   type Transaction,
@@ -34,7 +34,22 @@ export function TransactionForm({
   onDuplicate: (transaction: Transaction) => void;
   onClose: () => void;
 }) {
-  const { data, save, remove, notify, upgradeReady } = useData();
+  const {
+    data,
+    save,
+    remove,
+    notify,
+    upgradeReady,
+    businessReady,
+    demo,
+    userId,
+  } = useData();
+  const requestId = useRef(crypto.randomUUID());
+  const submitting = useRef(false);
+  const receiptPath = useRef<string | null>(null);
+  const [receipt, setReceipt] = useState<File | null>(null);
+  const [removeReceipt, setRemoveReceipt] = useState(false);
+  const [receiptError, setReceiptError] = useState("");
   const source = transaction || prefill?.template;
   const [type, setType] = useState<"income" | "expense">(
     source?.type === "income" ? "income" : "expense",
@@ -64,14 +79,31 @@ export function TransactionForm({
   const payroll = type === "expense" && employee && kind;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setError("");
     setBusy(true);
     try {
       const form = new FormData(event.currentTarget);
       const date = String(form.get("date") || today());
       const payrollKind = payroll ? kind : null;
+      let knownPlan = data.employee_periods.some(
+        (p) =>
+          p.employee_id === employee && p.month === `${date.slice(0, 7)}-01`,
+      );
+      if (payrollKind && !knownPlan && businessReady && !demo) {
+        const { supabase } = await import("@/lib/supabase");
+        const { data: plans, error: planError } = await supabase!
+          .from("employee_periods")
+          .select("id")
+          .eq("employee_id", employee)
+          .eq("month", `${date.slice(0, 7)}-01`);
+        if (planError) throw planError;
+        knownPlan = !!plans?.length;
+      }
       if (
         payrollKind &&
+        !knownPlan &&
         !data.employee_periods.some(
           (p) =>
             p.employee_id === employee && p.month === `${date.slice(0, 7)}-01`,
@@ -86,16 +118,39 @@ export function TransactionForm({
         );
       const nonCash =
         payrollKind === "deduction" || payrollKind === "bonus_due";
-      const categoryId = nonCash ? null : category || categories[0]?.id;
+      const categoryId = nonCash ? null : category;
       if (!categoryId && !nonCash)
         throw new Error(
-          "Önce Daha Fazla → Kategoriler bölümünden bir kategori ekleyin.",
+          categories.length
+            ? "Kategori seçin."
+            : "Önce Daha Fazla → Kategoriler bölümünden bir kategori ekleyin.",
         );
-      await save(
+      const amount = parseMoney(String(form.get("amount")));
+      let newReceipt =
+        type === "expense" && !nonCash
+          ? transaction?.receipt_path || null
+          : null;
+      if (removeReceipt) newReceipt = null;
+      if (receipt && type === "expense" && !nonCash) {
+        if (demo)
+          throw new Error(
+            "Belgeler yalnızca gerçek yönetici hesabında yüklenebilir.",
+          );
+        const { prepareReceipt, uploadReceipt } =
+          await import("@/lib/receipts");
+        const blob = await prepareReceipt(receipt);
+        const path =
+          receiptPath.current ||
+          `${userId}/${transaction?.id || requestId.current}/${crypto.randomUUID()}.${blob.type === "application/pdf" ? "pdf" : "jpg"}`;
+        receiptPath.current = path;
+        await uploadReceipt(blob, path);
+        newReceipt = path;
+      }
+      const savedId = await save(
         "transactions",
         {
           type: nonCash ? "adjustment" : type,
-          amount: parseMoney(String(form.get("amount"))),
+          amount,
           category_id: categoryId || null,
           date,
           description: String(form.get("description") || "").trim(),
@@ -104,14 +159,44 @@ export function TransactionForm({
             : String(form.get("vehicle") || "") || null,
           employee_id: employee || null,
           payroll_kind: payrollKind || null,
+          ...(businessReady && !demo
+            ? {
+                receipt_path:
+                  type === "expense" && !nonCash ? newReceipt : null,
+              }
+            : {}),
         },
         transaction?.id,
+        requestId.current,
       );
+      if (!demo && receiptPath.current && newReceipt === receiptPath.current)
+        receiptPath.current = null;
+      if (
+        !demo &&
+        transaction?.receipt_path &&
+        transaction.receipt_path !== newReceipt
+      ) {
+        const { supabase } = await import("@/lib/supabase");
+        const { error: cleanup } = await supabase!.storage
+          .from("finance-receipts")
+          .remove([transaction.receipt_path]);
+        if (cleanup) notify("Kayıt kaydedildi; eski belge temizlenemedi.");
+      }
+      void savedId;
       notify(transaction ? "İşlem güncellendi." : "İşlem kaydedildi.");
       onClose();
     } catch (e) {
+      // Delete only an unreferenced failed upload. Storage RLS protects an acknowledged or timed-out committed receipt.
+      if (!demo && receiptPath.current) {
+        const { supabase } = await import("@/lib/supabase");
+        const result = await supabase!.storage
+          .from("finance-receipts")
+          .remove([receiptPath.current]);
+        if (!result.error && result.data?.length) receiptPath.current = null;
+      }
       setError(errorMessage(e));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -180,7 +265,7 @@ export function TransactionForm({
         ) : (
           <Field label="Kategori">
             <select
-              value={category || categories[0]?.id || ""}
+              value={category}
               onChange={(e) => setCategory(e.target.value)}
               required
             >
@@ -230,11 +315,13 @@ export function TransactionForm({
                 defaultValue={source?.vehicle_id || prefill?.vehicle_id || ""}
               >
                 <option value="">Araç seçilmedi</option>
-                {data.vehicles.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.plate} · {v.brand} {v.model}
-                  </option>
-                ))}
+                {data.vehicles
+                  .filter((v) => !v.archived_at || v.id === source?.vehicle_id)
+                  .map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.plate} · {v.brand} {v.model}
+                    </option>
+                  ))}
               </select>
             </Field>
           )}
@@ -245,28 +332,33 @@ export function TransactionForm({
                 setEmployee(e.target.value);
                 if (!e.target.value) setKind("");
                 else if (type === "expense") {
-                  setKind("salary_payment");
-                  setCategory(
-                    data.categories.find(
-                      (c) => c.name === "Personel" && c.type === "expense",
-                    )?.id || "",
-                  );
+                  setKind("");
                 }
               }}
             >
               <option value="">Personel seçilmedi</option>
-              {data.employees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
+              {data.employees
+                .filter((e) => !e.archived_at || e.id === source?.employee_id)
+                .map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
             </select>
           </Field>
           {employee && type === "expense" && (
             <Field label="Personel işlemi">
               <select
                 value={kind}
-                onChange={(e) => setKind(e.target.value as PayrollKind | "")}
+                onChange={(e) => {
+                  setKind(e.target.value as PayrollKind | "");
+                  if (e.target.value)
+                    setCategory(
+                      data.categories.find(
+                        (c) => c.name === "Personel" && c.type === "expense",
+                      )?.id || "",
+                    );
+                }}
               >
                 <option value="">Diğer gider (maaşa dahil değil)</option>
                 {Object.entries(payrollLabels)
@@ -287,6 +379,71 @@ export function TransactionForm({
             </p>
           )}
         </div>
+        {type === "expense" &&
+          businessReady &&
+          advanced &&
+          !["deduction", "bonus_due"].includes(kind) && (
+            <div className="receipt-field">
+              <Field label="Fiş / Fatura (isteğe bağlı)">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  disabled={busy}
+                  onChange={(e) => {
+                    setReceipt(e.target.files?.[0] || null);
+                    receiptPath.current = null;
+                    setRemoveReceipt(false);
+                    setReceiptError("");
+                  }}
+                />
+              </Field>
+              <small className="muted">
+                JPEG, PNG, WebP veya PDF · En fazla 2 MB · Görseller
+                sıkıştırılır
+              </small>
+              {transaction?.receipt_path && (
+                <div className="receipt-actions">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={async () => {
+                      const windowRef = window.open("about:blank", "_blank");
+                      if (windowRef) windowRef.opener = null;
+                      try {
+                        const { openReceipt } = await import("@/lib/receipts");
+                        const url = await openReceipt(
+                          transaction.receipt_path!,
+                        );
+                        if (windowRef) windowRef.location.href = url;
+                        else
+                          setReceiptError(
+                            "Belgeyi açmak için açılır pencerelere izin verin.",
+                          );
+                      } catch (e) {
+                        windowRef?.close();
+                        setReceiptError(errorMessage(e));
+                      }
+                    }}
+                  >
+                    Belgeyi aç
+                  </button>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={removeReceipt}
+                      onChange={(e) => setRemoveReceipt(e.target.checked)}
+                    />{" "}
+                    Belgeyi kaldır
+                  </label>
+                </div>
+              )}
+              {receiptError && (
+                <p role="alert" className="form-error">
+                  {receiptError}
+                </p>
+              )}
+            </div>
+          )}
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -362,7 +519,9 @@ export function EntityForm({
   modal: EntityModal;
   onClose: () => void;
 }) {
-  const { save, remove, notify } = useData();
+  const { save, remove, notify, businessReady } = useData();
+  const requestId = useRef(crypto.randomUUID());
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [confirmDelete, setConfirmDelete] = useState(false);
@@ -385,6 +544,8 @@ export function EntityForm({
           : "employee_periods";
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     const form = new FormData(event.currentTarget);
@@ -421,12 +582,18 @@ export function EntityForm({
       }
       if ("name" in values && !String(values.name).trim())
         throw new Error("İsim boş bırakılamaz.");
-      await save(table, values, type === "period" ? undefined : record?.id);
+      await save(
+        table,
+        values,
+        type === "period" ? undefined : record?.id,
+        requestId.current,
+      );
       notify(`${title} kaydedildi.`);
       onClose();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -435,7 +602,7 @@ export function EntityForm({
     setError("");
     try {
       await remove(table, record!.id);
-      notify(`${title} silindi.`);
+      notify(`${title} ${type === "category" ? "silindi" : "arşivlendi"}.`);
       onClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -582,39 +749,45 @@ export function EntityForm({
         <button className="button primary full" disabled={busy}>
           {busy ? "Kaydediliyor…" : "Kaydet"}
         </button>
-        {record && type !== "period" && (
-          <div className="delete-zone">
-            {confirmDelete ? (
-              <>
-                <p>Bu kayıt silinsin mi? Bağlı işlemler varsa silinmez.</p>
+        {record &&
+          type !== "period" &&
+          (type === "category" || businessReady) && (
+            <div className="delete-zone">
+              {confirmDelete ? (
+                <>
+                  <p>
+                    {type === "category"
+                      ? "Bu kayıt silinsin mi? Bağlı işlemler varsa silinmez."
+                      : "Arşivlensin mi? Geçmiş kayıtlar korunur; yeni işlemler için seçilemez."}
+                  </p>
+                  <button
+                    type="button"
+                    className="button danger"
+                    disabled={busy}
+                    onClick={deleteRecord}
+                  >
+                    {type === "category" ? "Evet, sil" : "Evet, arşivle"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Vazgeç
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
-                  className="button danger"
-                  disabled={busy}
-                  onClick={deleteRecord}
+                  className="text-button danger-text"
+                  onClick={() => setConfirmDelete(true)}
                 >
-                  Evet, sil
+                  <Trash2 size={15} />
+                  {type === "category" ? `${title} sil` : "Arşivle"}
                 </button>
-                <button
-                  type="button"
-                  className="button ghost"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  Vazgeç
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="text-button danger-text"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2 size={15} />
-                {title} sil
-              </button>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
       </form>
     </Modal>
   );

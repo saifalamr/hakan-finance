@@ -19,6 +19,7 @@ export type Vehicle = {
   plate: string;
   brand: string;
   model: string;
+  archived_at?: string | null;
 };
 export type Employee = {
   id: string;
@@ -26,6 +27,7 @@ export type Employee = {
   name: string;
   salary: number;
   work_days: number;
+  archived_at?: string | null;
 };
 export type PayrollPeriod = {
   id: string;
@@ -48,6 +50,10 @@ export type Transaction = {
   payroll_kind: PayrollKind | null;
   created_at: string;
   deleted_at?: string | null;
+  receipt_path?: string | null;
+  client_request_id?: string | null;
+  recurring_id?: string | null;
+  recurring_date?: string | null;
 };
 export type Data = {
   transactions: Transaction[];
@@ -56,6 +62,8 @@ export type Data = {
   categories: Category[];
   employee_periods: PayrollPeriod[];
   finance_settings?: FinanceSettings[];
+  recurring_expenses?: RecurringExpense[];
+  export_context?: { end: string; balance: number | null };
 };
 export const emptyData: Data = {
   transactions: [],
@@ -232,23 +240,48 @@ export function dailyChart(transactions: Transaction[], month: string) {
   }));
 }
 export type DateFilter = "today" | "week" | "month" | "custom";
+export function dateRange(filter: DateFilter, start: string, end: string) {
+  const now = today();
+  const monday = new Date(now + "T12:00:00Z");
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return filter === "today"
+    ? { start: now, end: now }
+    : filter === "week"
+      ? { start: monday.toISOString().slice(0, 10), end: now }
+      : filter === "month"
+        ? { start: currentMonth() + "-01", end: monthLastDate(currentMonth()) }
+        : { start, end };
+}
+export function monthLastDate(month: string) {
+  const d = new Date(
+    Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0),
+  );
+  return `${month}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
 export function filterDates(
   transactions: Transaction[],
   filter: DateFilter,
   start: string,
   end: string,
 ) {
-  const now = today();
-  const monday = new Date(now + "T12:00:00");
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
-  return transactions.filter((t) =>
-    filter === "today"
-      ? t.date === now
-      : filter === "week"
-        ? t.date >= weekStart && t.date <= now
-        : filter === "month"
-          ? t.date.startsWith(currentMonth())
-          : t.date >= start && t.date <= end,
+  const range = dateRange(filter, start, end);
+  return transactions.filter(
+    (t) => t.date >= range.start && t.date <= range.end,
   );
 }
+
+export type RecurringExpense = {
+  id: string;
+  user_id: string;
+  name: string;
+  amount: number;
+  category_id: string;
+  frequency: "weekly" | "monthly" | "yearly";
+  next_date: string;
+  anchor_day: number;
+  anchor_month: number;
+  vehicle_id: string | null;
+  employee_id: string | null;
+  payroll_kind: PayrollKind | null;
+  archived_at?: string | null;
+};

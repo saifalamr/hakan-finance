@@ -21,11 +21,17 @@ import { EmptyState } from "./ui";
 export function CashChart({
   transactions,
   month,
+  daily,
 }: {
+  daily?: { day: number; Gelir: number; Gider: number }[];
   transactions: Transaction[];
   month: string;
 }) {
-  if (!transactions.some((t) => t.type !== "adjustment"))
+  if (
+    daily
+      ? !daily.some((d) => d.Gelir || d.Gider)
+      : !transactions.some((t) => t.type !== "adjustment")
+  )
     return (
       <EmptyState
         title="Bu ayın grafiği burada"
@@ -56,7 +62,11 @@ export function CashChart({
           initialDimension={{ width: 320, height: 200 }}
         >
           <AreaChart
-            data={dailyChart(transactions, month)}
+            data={
+              daily
+                ? daily.map((d) => ({ ...d, day: String(d.day) }))
+                : dailyChart(transactions, month)
+            }
             margin={{ top: 8, right: 8, left: -12, bottom: 0 }}
           >
             <CartesianGrid stroke="#edf0f0" vertical={false} />
@@ -145,18 +155,22 @@ export function BreakdownChart({
 }
 export function MonthlyChart({
   data,
+  expenseOnly = false,
 }: {
   data: { name: string; Gelir: number; Gider: number }[];
+  expenseOnly?: boolean;
 }) {
   if (!data.some((d) => d.Gelir || d.Gider))
     return <EmptyState title="Henüz rapor verisi yok" />;
   return (
     <>
       <div className="chart-legend">
-        <span>
-          <i className="income-dot" />
-          Gelir
-        </span>
+        {!expenseOnly && (
+          <span>
+            <i className="income-dot" />
+            Gelir
+          </span>
+        )}
         <span>
           <i className="expense-dot" />
           Gider
@@ -165,7 +179,11 @@ export function MonthlyChart({
       <div
         className="chart-frame"
         role="img"
-        aria-label="Son altı ayın gelir ve gider karşılaştırması"
+        aria-label={
+          expenseOnly
+            ? "Aylık araç gider eğilimi"
+            : "Son altı ayın gelir ve gider karşılaştırması"
+        }
       >
         <ResponsiveContainer
           width="100%"
@@ -199,12 +217,14 @@ export function MonthlyChart({
                 border: "1px solid #e7ebea",
               }}
             />
-            <Bar
-              dataKey="Gelir"
-              fill="#287c62"
-              radius={[3, 3, 0, 0]}
-              isAnimationActive={false}
-            />
+            {!expenseOnly && (
+              <Bar
+                dataKey="Gelir"
+                fill="#287c62"
+                radius={[3, 3, 0, 0]}
+                isAnimationActive={false}
+              />
+            )}
             <Bar
               dataKey="Gider"
               fill="#c56a65"

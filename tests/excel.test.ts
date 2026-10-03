@@ -46,3 +46,29 @@ test("styled XLSX uses typed amounts, formulas, real dates, filters and safe des
     /<f>SUM\(H6:H6\)<\/f><v>0<\/v>/,
   );
 });
+
+test("CSV is Turkish, formula-safe and retains numeric negative payroll; SQL balance overrides partial report history", async () => {
+  const { buildCSV } = await import("../src/lib/export-data");
+  const { reportRows } = await import("../src/lib/excel");
+  const data = makeDemo();
+  const month = data.transactions[0].date.slice(0, 7);
+  data.transactions = [
+    {
+      ...data.transactions[0],
+      description: "=HYPERLINK(unsafe)",
+      type: "adjustment",
+      payroll_kind: "deduction",
+      category_id: null,
+      employee_id: "e1",
+      vehicle_id: null,
+      amount: 10000,
+    },
+  ];
+  data.export_context = { end: month + "-31", balance: 1234500 };
+  const csv = buildCSV(data, month + "-01", month + "-31");
+  assert.ok(csv.startsWith("\ufeff"));
+  assert.ok(csv.includes("' =") === false);
+  assert.ok(csv.includes("'="));
+  assert.ok(csv.includes('"-100,00"'));
+  assert.equal(reportRows(data, month + "-01", month + "-31")[0][5][1], 12345);
+});

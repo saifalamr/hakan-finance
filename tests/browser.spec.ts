@@ -151,6 +151,9 @@ test("vehicle, employee, category CRUD and Turkish validation", async ({
   ).toBeVisible();
   await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
   await page.getByLabel("Tutar (₺)").fill("-5");
+  await page
+    .getByLabel("Kategori", { exact: true })
+    .selectOption({ label: "Yakıt" });
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
     "Geçerli bir tutar",
@@ -300,7 +303,7 @@ test("opening balance persists and Excel download is a styled real workbook", as
     .getByRole("navigation", { name: "Mobil menü" })
     .getByRole("link", { name: "Ana Sayfa", exact: true })
     .click();
-  await expect(page.locator(".current-balance")).toContainText("₺44.400,50");
+  await expect(page.locator(".balance-strip")).toContainText("₺44.400,50");
   await nav(page, "Daha Fazla");
   await page.getByRole("button", { name: "Excel İndir", exact: true }).click();
   const downloadPromise = page.waitForEvent("download");
@@ -361,6 +364,12 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
     else if (url.pathname === "/auth/v1/logout") {
       await route.fulfill({ status: 204 });
       return;
+    } else if (url.pathname.startsWith("/rest/v1/rpc/")) {
+      await route.fulfill({
+        status: 404,
+        json: { code: "PGRST202", message: "function not installed" },
+      });
+      return;
     } else if (url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.split("/").at(-1)!;
       if (request.method() === "GET" && table !== "app_admin") {
@@ -420,6 +429,9 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
     .click();
   const readsBeforeSave = reads;
   await page.getByLabel("Tutar (₺)").fill("1250");
+  await page
+    .getByLabel("Kategori", { exact: true })
+    .selectOption({ label: "Yakıt" });
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".transaction-row")).toContainText("₺1.250,00");
@@ -465,7 +477,7 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
   expect(cursors[1]).toMatch(/^gt\./);
   expect(cursors[2]).toMatch(/^gt\./);
   await nav(page, "İşlemler");
-  await expect(page.getByRole("heading", { name: "1001 işlem" })).toBeVisible();
+  await expect(page.getByText("1001 kayıt", { exact: true })).toBeVisible();
   await expect(page.locator(".transaction-row")).toHaveCount(40);
   await page
     .getByRole("button", { name: "Daha fazla göster", exact: true })
@@ -502,9 +514,7 @@ test("10,000-row Excel export leaves touch forms usable and renders bounded list
   await demo(page);
   await nav(page, "İşlemler");
   await expect(page.locator(".transaction-row")).toHaveCount(40);
-  await expect(
-    page.getByRole("heading", { name: "10000 işlem" }),
-  ).toBeVisible();
+  await expect(page.getByText("10000 kayıt", { exact: true })).toBeVisible();
   await nav(page, "Daha Fazla");
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -537,4 +547,246 @@ test("10,000-row Excel export leaves touch forms usable and renders bounded list
   expect(xml).toContain('autoFilter ref="A5:I10005"');
   expect(xml).toContain("Yerel yük testi 9999");
   await expect(page.getByText("Excel raporu indirildi.")).toBeVisible();
+});
+
+test("compact fleet status, filters, archive/restore and employee-linked vehicle expense", async ({
+  page,
+}) => {
+  const { makeDemo } = await import("../src/lib/demo");
+  const { shiftMonth, currentMonth } = await import("../src/lib/finance");
+  const data = makeDemo();
+  const month = currentMonth();
+  data.vehicles = Array.from({ length: 7 }, (_, i) => ({
+    ...data.vehicles[0],
+    id: "fleet-" + i,
+    plate: "34 QA " + (i + 1),
+  }));
+  data.transactions = [];
+  for (let i = 0; i < 6; i++)
+    for (const [offset, amount] of [
+      [-2, 100000],
+      [-1, 100000],
+      [0, i === 0 ? 150000 : i === 1 ? 120000 : 90000],
+    ])
+      data.transactions.push({
+        ...makeDemo().transactions[0],
+        id: `fleet-t-${i}-${offset}`,
+        type: "expense",
+        vehicle_id: "fleet-" + i,
+        employee_id: null,
+        payroll_kind: null,
+        date: shiftMonth(month, offset) + "-01",
+        amount,
+      });
+  await page.addInitScript(
+    (f) =>
+      localStorage.setItem("finance-development-demo-v1", JSON.stringify(f)),
+    data,
+  );
+  await demo(page);
+  await nav(page, "Araçlar");
+  await expect(page.locator(".fleet-row")).toHaveCount(7);
+  const sizes = await page
+    .locator(".fleet-row")
+    .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height));
+  expect(sizes.every((n) => n >= 70 && n <= 100)).toBe(true);
+  await page.screenshot({
+    path: "test-results/compact-vehicles-mobile.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Yüksek Gider", exact: true }).click();
+  await expect(page.locator(".fleet-row")).toHaveCount(1);
+  await page.getByRole("button", { name: "Tümü", exact: true }).click();
+  await page.getByLabel("Araç ara").fill("34qa7");
+  await expect(page.locator(".fleet-row")).toHaveCount(1);
+  await page.locator(".fleet-row").click();
+  await page.getByRole("button", { name: "Düzenle", exact: true }).click();
+  await page.getByRole("button", { name: "Arşivle", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Evet, arşivle", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Yeniden aktif et" }).click();
+  await page.getByRole("button", { name: "Gider Ekle", exact: false }).click();
+  await expect(page.getByLabel("Araç", { exact: true })).toHaveValue("fleet-6");
+  await page.getByLabel("Tutar (₺)").fill("250");
+  await page
+    .getByLabel("Kategori", { exact: true })
+    .selectOption({ label: "Yakıt" });
+  await page.getByLabel("Personel", { exact: true }).selectOption("e1");
+  await expect(page.getByLabel("Personel işlemi")).toHaveValue("");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).dblclick();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  if ((await page.locator("h1").textContent()) === "Araçlar")
+    await page.getByRole("link", { name: /34 QA 7/ }).click();
+  await expect(page.locator(".transaction-row")).toHaveCount(1);
+  await nav(page, "Personel");
+  await page.getByRole("link", { name: /Ahmet Yılmaz/ }).click();
+  await expect(page.locator(".payroll-balance")).toContainText("₺32.000,00");
+  await page.getByRole("button", { name: "Düzenle", exact: true }).click();
+  await page.getByRole("button", { name: "Arşivle", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Evet, arşivle", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Yeniden aktif et" }).click();
+  await noOverflow(page);
+});
+test("server summary and paged history, receipt upload/open, recurring confirmation and safe double submission", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  const { businessAPI } = await import("./business-browser-fixture");
+  const api = await businessAPI(page, true);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  try {
+    await page.goto("/");
+    await page.getByLabel("E-posta").fill("admin@example.test");
+    await page.getByLabel("Şifre").fill("test-password");
+    await page.getByRole("button", { name: "Giriş Yap", exact: true }).click();
+    await expect(page.locator("h1")).toHaveText("Bu Ay");
+    await nav(page, "Araçlar");
+    await expect(page.locator(".fleet-row")).toHaveCount(50);
+    expect(
+      api.calls.some(
+        (c) => c.path === "/rest/v1/transactions" && c.method === "GET",
+      ),
+    ).toBe(false);
+    expect(
+      api.calls
+        .filter((c) => c.path.endsWith("/finance_transactions"))
+        .every((c) => c.rows <= 41),
+    ).toBe(true);
+    await page.getByLabel("Araç ara").fill("34 QA 001");
+    await page.locator(".fleet-row").click();
+    await expect(page.locator(".detail-numbers")).toContainText("₺1.500,00");
+    await page
+      .getByRole("button", { name: "Gider Ekle", exact: false })
+      .click();
+    await expect(page.getByLabel("Araç", { exact: true })).toHaveValue(
+      api.vehicles[0].id,
+    );
+    await page.getByLabel("Tutar (₺)").fill("123,45");
+    await page.getByLabel("Kategori", { exact: true }).selectOption(api.fuel);
+    await page.getByLabel("Fiş / Fatura (isteğe bağlı)").setInputFiles({
+      name: "receipt.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n% local test receipt\n%%EOF"),
+    });
+    let release!: () => void;
+    api.hold(new Promise<void>((resolve) => (release = resolve)));
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Kaydediliyor…", exact: true }),
+    ).toBeDisabled();
+    release();
+    api.hold(null);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const saved = (
+      await api.db.query<{ row: { id: string; receipt_path: string } }>(
+        "select to_jsonb(t)row from transactions t where receipt_path is not null",
+      )
+    ).rows;
+    expect(saved).toHaveLength(1);
+    expect(saved[0].row.receipt_path).toContain(saved[0].row.id);
+    await page.getByRole("button", { name: "Yakıt, ₺123,45, düzenle" }).click();
+    const popup = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Belgeyi aç", exact: true }).click();
+    const opened = await popup;
+    await expect
+      .poll(() => opened.url())
+      .toContain("/object/sign/finance-receipts/");
+    await opened.close();
+    await page.getByLabel("Fiş / Fatura (isteğe bağlı)").setInputFiles({
+      name: "small.png",
+      mimeType: "image/png",
+      buffer: await page.screenshot({
+        clip: { x: 0, y: 0, width: 1, height: 1 },
+      }),
+    });
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const objects = (
+      await api.db.query<{ name: string }>("select name from storage.objects")
+    ).rows;
+    expect(objects).toHaveLength(1);
+    expect(objects[0].name).toMatch(/\.jpg$/);
+
+    await nav(page, "Daha Fazla");
+    await page
+      .getByRole("button", { name: "Tekrarlayan Gider Ekle", exact: true })
+      .click();
+    await page.getByLabel("Gider adı").fill("Yerel kira");
+    await page.getByLabel("Tutar (₺)").fill("500");
+    await page
+      .getByRole("dialog")
+      .getByLabel("Kategori", { exact: true })
+      .selectOption(api.fuel);
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Kaydet", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const schedule = page
+      .locator(".recurring-row")
+      .filter({ hasText: "Yerel kira" });
+    await schedule.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Gideri kaydet", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(
+      (
+        await api.db.query(
+          "select id from transactions where recurring_id is not null",
+        )
+      ).rows,
+    ).toHaveLength(1);
+    await expect(
+      schedule.getByRole("button", { name: "Kaydet", exact: true }),
+    ).toBeDisabled();
+    await noOverflow(page);
+    await nav(page, "İşlemler");
+    await expect(page.locator(".transaction-row")).toHaveCount(40);
+    await page
+      .getByRole("button", { name: "Daha fazla göster", exact: true })
+      .click();
+    await expect(page.locator(".transaction-row")).toHaveCount(80);
+    await page.getByLabel("İşlem ara").fill("Yerel kira");
+    await expect(page.locator(".transaction-row")).toHaveCount(1);
+    await page.getByRole("button", { name: "Temizle", exact: true }).click();
+    await expect(page.locator(".transaction-row")).toHaveCount(40);
+    await nav(page, "Daha Fazla");
+    await page
+      .getByRole("button", { name: "Excel İndir", exact: true })
+      .click();
+    await page.getByLabel("Dosya biçimi").selectOption("csv");
+    const csvDownload = page.waitForEvent("download");
+    await page
+      .getByRole("button", { name: "Raporu indir", exact: true })
+      .click();
+    const csv = await csvDownload;
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile((await csv.path())!, "utf8");
+    expect(text).toContain("Yerel stress 20000");
+    expect(text).toContain("Yerel kira");
+    expect(text).toContain("Personel İşlemi");
+    await nav(page, "Araçlar");
+    await expect(page.locator(".fleet-row")).toHaveCount(50);
+    await page.route("**/rest/v1/rpc/finance_summary", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "XX000", message: "summary unavailable" }),
+      }),
+    );
+    await page.getByRole("button", { name: "Sonraki ay", exact: true }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.locator(".fleet-row")).toHaveCount(0);
+    await expect(page.locator(".fleet-summary")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await api.db.close();
+  }
 });
