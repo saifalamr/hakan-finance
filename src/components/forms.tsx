@@ -21,36 +21,41 @@ export type TransactionPrefill = {
   employee_id?: string;
   payroll_kind?: PayrollKind;
   date?: string;
+  template?: Transaction;
 };
 export function TransactionForm({
   transaction,
   prefill,
   onClose,
+  onDuplicate,
 }: {
   transaction?: Transaction;
   prefill?: TransactionPrefill;
+  onDuplicate: (transaction: Transaction) => void;
   onClose: () => void;
 }) {
-  const { data, save, remove, notify } = useData();
+  const { data, save, remove, notify, upgradeReady } = useData();
+  const source = transaction || prefill?.template;
   const [type, setType] = useState<"income" | "expense">(
-    transaction?.type === "income" ? "income" : "expense",
+    source?.type === "income" ? "income" : "expense",
   );
   const [employee, setEmployee] = useState(
-    transaction?.employee_id || prefill?.employee_id || "",
+    source?.employee_id || prefill?.employee_id || "",
   );
   const [kind, setKind] = useState<PayrollKind | "">(
-    transaction?.payroll_kind || prefill?.payroll_kind || "",
+    source?.payroll_kind || prefill?.payroll_kind || "",
   );
   const [category, setCategory] = useState(
-    transaction?.category_id ||
-      (prefill?.employee_id && prefill?.payroll_kind
+    source?.category_id ||
+      ((source?.employee_id && source?.payroll_kind) ||
+      (prefill?.employee_id && prefill?.payroll_kind)
         ? data.categories.find(
             (c) => c.name === "Personel" && c.type === "expense",
           )?.id || ""
         : ""),
   );
   const [advanced, setAdvanced] = useState(
-    Boolean(transaction || prefill?.vehicle_id || prefill?.employee_id),
+    Boolean(source || prefill?.vehicle_id || prefill?.employee_id),
   );
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -75,16 +80,21 @@ export function TransactionForm({
         throw new Error(
           "Önce personel detayından bu ayın maaş planını kaydedin.",
         );
-      const categoryId =
-        payrollKind === "deduction" ? null : category || categories[0]?.id;
-      if (!categoryId && payrollKind !== "deduction")
+      if (payrollKind === "bonus_due" && !upgradeReady)
+        throw new Error(
+          "Prim alacağı için veritabanı güncellemesini tamamlayın.",
+        );
+      const nonCash =
+        payrollKind === "deduction" || payrollKind === "bonus_due";
+      const categoryId = nonCash ? null : category || categories[0]?.id;
+      if (!categoryId && !nonCash)
         throw new Error(
           "Önce Daha Fazla → Kategoriler bölümünden bir kategori ekleyin.",
         );
       await save(
         "transactions",
         {
-          type: payrollKind === "deduction" ? "adjustment" : type,
+          type: nonCash ? "adjustment" : type,
           amount: parseMoney(String(form.get("amount"))),
           category_id: categoryId || null,
           date,
@@ -157,13 +167,15 @@ export function TransactionForm({
             required
             placeholder="0,00"
             className="amount-input"
-            defaultValue={transaction ? inputMoney(transaction.amount) : ""}
+            defaultValue={source ? inputMoney(source.amount) : ""}
             maxLength={20}
           />
         </Field>
-        {payroll && kind === "deduction" ? (
+        {payroll && (kind === "deduction" || kind === "bonus_due") ? (
           <p className="form-note">
-            Kesinti maaş bakiyesini azaltır; kasa gideri oluşturmaz.
+            {kind === "bonus_due"
+              ? "Prim alacağı kalan ödemeyi artırır; henüz kasa gideri oluşturmaz."
+              : "Kesinti maaş bakiyesini azaltır; kasa gideri oluşturmaz."}
           </p>
         ) : (
           <Field label="Kategori">
@@ -206,7 +218,7 @@ export function TransactionForm({
           <Field label="Açıklama">
             <input
               name="description"
-              defaultValue={transaction?.description}
+              defaultValue={source?.description}
               placeholder="Kısa bir not"
               maxLength={300}
             />
@@ -215,9 +227,7 @@ export function TransactionForm({
             <Field label="Araç">
               <select
                 name="vehicle"
-                defaultValue={
-                  transaction?.vehicle_id || prefill?.vehicle_id || ""
-                }
+                defaultValue={source?.vehicle_id || prefill?.vehicle_id || ""}
               >
                 <option value="">Araç seçilmedi</option>
                 {data.vehicles.map((v) => (
@@ -259,17 +269,21 @@ export function TransactionForm({
                 onChange={(e) => setKind(e.target.value as PayrollKind | "")}
               >
                 <option value="">Diğer gider (maaşa dahil değil)</option>
-                {Object.entries(payrollLabels).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
+                {Object.entries(payrollLabels)
+                  .filter(([key]) => upgradeReady || key !== "bonus_due")
+                  .map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
               </select>
             </Field>
           )}
           {kind === "bonus" && type === "expense" && (
             <p className="form-note">
-              Ek ödeme hem hak edişe hem yapılan ödemeye eklenir.
+              Ödenen prim hem hak edişe hem yapılan ödemeye eklenir. Prim
+              alacağı ödendiğinde bu kaydı Ödenen prim olarak değiştirin; yeni
+              kayıt eklemeyin.
             </p>
           )}
         </div>
@@ -282,10 +296,23 @@ export function TransactionForm({
           {busy ? "Kaydediliyor…" : "Kaydet"}
         </button>
         {transaction && (
+          <button
+            type="button"
+            className="button secondary full"
+            disabled={busy}
+            onClick={() => onDuplicate(transaction)}
+          >
+            Tekrarla
+          </button>
+        )}
+        {transaction && (
           <div className="delete-zone">
             {confirmDelete ? (
               <>
-                <p>Bu işlem kalıcı olarak silinsin mi?</p>
+                <p>
+                  İşlem silinenlere taşınsın mı? Daha sonra geri
+                  yükleyebilirsiniz.
+                </p>
                 <button
                   type="button"
                   className="button danger"

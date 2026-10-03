@@ -8,7 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { type Data, emptyData, currentMonth } from "@/lib/finance";
+import {
+  type Data,
+  type Transaction,
+  emptyData,
+  currentMonth,
+} from "@/lib/finance";
 import { demoAllowed, supabase } from "@/lib/supabase";
 import { demoUser, makeDemo } from "@/lib/demo";
 import type { PostgrestError } from "@supabase/supabase-js";
@@ -29,6 +34,10 @@ type Store = {
   signOut: () => Promise<void>;
   toast: string;
   notify: (message: string) => void;
+  upgradeReady: boolean;
+  trash: Transaction[];
+  lastDeleted: string;
+  restore: (id: string) => Promise<void>;
 };
 const Context = createContext<Store | null>(null);
 const DEMO_KEY = "finance-development-demo-v1";
@@ -71,7 +80,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [loadError, setLoadError] = useState(""),
     [loaded, setLoaded] = useState(false),
     [demo, setDemo] = useState(false),
-    [toast, setToast] = useState("");
+    [toast, setToast] = useState(""),
+    [upgradeReady, setUpgradeReady] = useState(false),
+    [lastDeleted, setLastDeleted] = useState("");
   const sequence = useRef(0);
   const authenticatedUser = useRef("");
   const notify = useCallback((message: string) => setToast(message), []);
@@ -94,12 +105,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
         "employee_periods",
       ];
       const rows = await Promise.all(tables.map(readAll));
+      let settings: Record<string, unknown>[] = [];
+      let upgraded = false;
+      try {
+        settings = await readAll("finance_settings");
+        upgraded = true;
+      } catch (error) {
+        const code = (error as PostgrestError).code;
+        if (code !== "42P01" && code !== "PGRST205") throw error;
+      }
       if (sequence.current === run) {
-        setData(
-          Object.fromEntries(
-            tables.map((table, i) => [table, rows[i]]),
-          ) as Data,
-        );
+        setUpgradeReady(upgraded);
+        setData({
+          ...Object.fromEntries(tables.map((table, i) => [table, rows[i]])),
+          finance_settings: settings,
+        } as Data);
         setLoaded(true);
       }
     } catch (error) {
@@ -179,6 +199,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       /* Reset invalid development data. */
     }
     setDemo(true);
+    setUpgradeReady(true);
     setLoaded(true);
     setUserId(demoUser);
     setReady(true);
@@ -194,8 +215,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         user_id: userId,
         id: id || crypto.randomUUID(),
       };
-      const rows = next[table] as unknown as RecordInput[];
-      if (table === "employee_periods") {
+      const rows = (next[table] ||= []) as unknown as RecordInput[];
+      if (table === "finance_settings") {
+        rows.splice(0, rows.length, record);
+      } else if (table === "employee_periods") {
         const index = rows.findIndex(
           (r) =>
             r.employee_id === values.employee_id && r.month === values.month,
@@ -224,16 +247,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
       return;
     }
     const query =
-      table === "employee_periods"
+      table === "finance_settings"
         ? supabase!
             .from(table)
-            .upsert(
-              { ...values, user_id: userId },
-              { onConflict: "user_id,employee_id,month" },
-            )
-        : id
-          ? supabase!.from(table).update(values).eq("id", id)
-          : supabase!.from(table).insert({ ...values, user_id: userId });
+            .upsert({ ...values, user_id: userId }, { onConflict: "user_id" })
+        : table === "employee_periods"
+          ? supabase!
+              .from(table)
+              .upsert(
+                { ...values, user_id: userId },
+                { onConflict: "user_id,employee_id,month" },
+              )
+          : id
+            ? supabase!.from(table).update(values).eq("id", id)
+            : supabase!.from(table).insert({ ...values, user_id: userId });
     const { data: saved, error } = await query.select("id");
     if (error) throw error;
     if (!saved?.length)
@@ -241,9 +268,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await refresh();
   }
   async function remove(table: Table, id: string) {
+    if (table === "transactions") {
+      if (!upgradeReady)
+        throw new Error(
+          "Geri alınabilir silme için veritabanı güncellemesini tamamlayın.",
+        );
+      await save("transactions", { deleted_at: new Date().toISOString() }, id);
+      setLastDeleted(id);
+      return;
+    }
     if (demo) {
       if (
-        table !== "transactions" &&
         data.transactions.some(
           (t) =>
             t.vehicle_id === id || t.employee_id === id || t.category_id === id,
@@ -253,7 +288,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           "Bu kayıt işlemlerde kullanılıyor. Önce bağlı işlemleri kaldırın.",
         );
       const next = structuredClone(data);
-      next[table] = next[table].filter((row) => row.id !== id) as never;
+      next[table] = (next[table] || []).filter((row) => row.id !== id) as never;
       if (table === "employees")
         next.employee_periods = next.employee_periods.filter(
           (p) => p.employee_id !== id,
@@ -270,6 +305,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (!deleted?.length) throw new Error("Kayıt silinemedi.");
     await refresh();
   }
+  async function restore(id: string) {
+    await save("transactions", { deleted_at: null }, id);
+    setLastDeleted("");
+    notify("İşlem geri yüklendi.");
+  }
   async function signOut() {
     if (supabase && !demo) {
       const { error } = await supabase.auth.signOut();
@@ -278,6 +318,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     sequence.current++;
     setUserId("");
     setData(emptyData);
+    setLastDeleted("");
+    setUpgradeReady(false);
     setDemo(false);
     setLoaded(false);
     setLoadError("");
@@ -285,7 +327,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
   return (
     <Context.Provider
       value={{
-        data,
+        data: {
+          ...data,
+          transactions: data.transactions.filter((t) => !t.deleted_at),
+        },
+        trash: data.transactions.filter((t) => t.deleted_at),
+        upgradeReady,
+        lastDeleted,
+        restore,
         userId,
         ready,
         loaded,

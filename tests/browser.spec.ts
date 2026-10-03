@@ -74,6 +74,10 @@ test("expense adds, updates, persists and deletes; vehicle total is automatic", 
   await expect(
     page.getByRole("button", { name: "Yakıt, ₺2.600,00, düzenle" }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "Geri al", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Yakıt, ₺2.600,00, düzenle" }),
+  ).toBeVisible();
 });
 test("employee payroll handles advance, deduction, bonus and historical plans", async ({
   page,
@@ -86,7 +90,8 @@ test("employee payroll handles advance, deduction, bonus and historical plans", 
   for (const [label, amount, balance] of [
     ["Avans", "2000", "₺27.000,00"],
     ["Kesinti", "1000", "₺26.000,00"],
-    ["Ek ödeme", "500", "₺26.000,00"],
+    ["Ödenen prim", "500", "₺26.000,00"],
+    ["Prim alacağı", "750", "₺26.750,00"],
   ] as const) {
     await page.getByRole("button", { name: label, exact: true }).click();
     await page.getByLabel("Tutar (₺)").fill(amount);
@@ -94,6 +99,12 @@ test("employee payroll handles advance, deduction, bonus and historical plans", 
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.locator(".payroll-balance")).toContainText(balance);
   }
+  await page
+    .getByRole("button", { name: "Prim alacağı, ₺750,00, düzenle" })
+    .click();
+  await page.getByLabel("Personel işlemi").selectOption("bonus");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(page.locator(".payroll-balance")).toContainText("₺26.000,00");
   await page.getByRole("button", { name: "Önceki ay" }).click();
   await expect(page.getByText("Bu ayın maaş planı yok")).toBeVisible();
   await page
@@ -185,6 +196,15 @@ test("phone widths, desktop, details and touch forms have no horizontal overflow
         name === "Ana Sayfa" ? "Bu Ay" : name,
       );
       await noOverflow(page);
+      if (name === "Daha Fazla") {
+        await page
+          .getByRole("button", { name: "Belirle", exact: true })
+          .click();
+        await noOverflow(page);
+        await page
+          .getByRole("button", { name: "Belirle", exact: true })
+          .click();
+      }
     }
     await page
       .getByRole("link", { name: "Raporlar", exact: false })
@@ -193,6 +213,13 @@ test("phone widths, desktop, details and touch forms have no horizontal overflow
     await expect(page.locator("h1")).toHaveText("Raporlar");
     await expect(page.getByRole("img", { name: /Son altı ay/ })).toBeVisible();
     await noOverflow(page);
+    await page
+      .getByRole("button", { name: "Excel İndir", exact: true })
+      .click();
+    await noOverflow(page);
+    await page
+      .getByRole("button", { name: "Excel İndir", exact: true })
+      .click();
     await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
     await page.getByRole("button", { name: "Diğer bilgiler" }).click();
     const dialog = page.getByRole("dialog");
@@ -222,6 +249,72 @@ test("phone widths, desktop, details and touch forms have no horizontal overflow
   });
   expect(errors).toEqual([]);
 });
+test("duplicate creates a new entry; trash survives reload and can be restored", async ({
+  page,
+}) => {
+  await demo(page);
+  await page.getByRole("button", { name: "Yakıt, ₺2.400,00, düzenle" }).click();
+  await page.getByRole("button", { name: "Tekrarla", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Yeni işlem");
+  await expect(page.getByLabel("Tutar (₺)")).toHaveValue("2400");
+  await expect(page.getByLabel("Tarih", { exact: true })).toHaveValue(today());
+  await page.getByLabel("Tutar (₺)").fill("123,45");
+  await page.getByLabel("Açıklama").fill("Tekrar testi");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Yakıt, ₺2.400,00, düzenle" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Yakıt, ₺123,45, düzenle" }).click();
+  await page.getByRole("button", { name: "İşlemi sil" }).click();
+  await page.getByRole("button", { name: "Evet, sil" }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "Geliştirme demosunu aç" }).click();
+  await nav(page, "Daha Fazla");
+  await expect(page.locator(".trash-row")).toContainText("₺123,45");
+  await page.getByRole("button", { name: "Tekrar testi geri yükle" }).click();
+  await expect(
+    page.getByText("Silinen işlem yok", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "Mobil menü" })
+    .getByRole("link", { name: "Ana Sayfa", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Yakıt, ₺123,45, düzenle" }),
+  ).toBeVisible();
+});
+test("opening balance persists and Excel download is a styled real workbook", async ({
+  page,
+}) => {
+  await demo(page);
+  await nav(page, "Daha Fazla");
+  await page.getByRole("button", { name: "Belirle", exact: true }).click();
+  await page.getByLabel("Başlangıç tutarı (₺)").fill("5.000,50");
+  await page
+    .getByLabel("Bakiye başlangıç tarihi")
+    .fill(today().slice(0, 7) + "-01");
+  await page
+    .getByRole("button", { name: "Bakiyeyi kaydet", exact: true })
+    .click();
+  await page
+    .getByRole("navigation", { name: "Mobil menü" })
+    .getByRole("link", { name: "Ana Sayfa", exact: true })
+    .click();
+  await expect(page.locator(".current-balance")).toContainText("₺44.400,50");
+  await nav(page, "Daha Fazla");
+  await page.getByRole("button", { name: "Excel İndir", exact: true }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Raporu indir", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/finans-.*\.xlsx$/);
+  const path = await download.path();
+  const { readFile } = await import("node:fs/promises");
+  const { unzipSync, strFromU8 } = await import("fflate");
+  const zip = unzipSync(await readFile(path!));
+  expect(strFromU8(zip["xl/worksheets/sheet1.xml"])).toContain("44400.5");
+  expect(strFromU8(zip["xl/worksheets/sheet2.xml"])).toContain("Depo dolumu");
+  expect(strFromU8(zip["xl/styles.xml"])).toContain("294F46");
+});
 test("authenticated Supabase API reads and writes, logout closes protected content", async ({
   page,
 }) => {
@@ -239,6 +332,7 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
     vehicles: [],
     employees: [],
     employee_periods: [],
+    finance_settings: [],
     categories: [
       {
         id: "00000000-0000-0000-0000-000000000010",
@@ -266,6 +360,13 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
       return;
     } else if (url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.split("/").at(-1)!;
+      if (table === "finance_settings") {
+        await route.fulfill({
+          status: 404,
+          json: { code: "PGRST205", message: "table not found" },
+        });
+        return;
+      }
       if (table === "app_admin") body = [{ user_id: user.id }];
       else if (request.method() === "POST") {
         const input = request.postDataJSON();

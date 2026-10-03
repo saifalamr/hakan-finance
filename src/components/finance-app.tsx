@@ -372,6 +372,18 @@ function Shell() {
       </nav>
       {transactionModal && (
         <TransactionForm
+          key={
+            transactionModal.transaction
+              ? `edit:${transactionModal.transaction.id}`
+              : transactionModal.prefill?.template
+                ? `copy:${transactionModal.prefill.template.id}`
+                : "new"
+          }
+          onDuplicate={(transaction) =>
+            setTransactionModal({
+              prefill: { template: transaction, date: undefined },
+            })
+          }
           transaction={transactionModal.transaction}
           prefill={transactionModal.prefill}
           onClose={() => setTransactionModal(null)}
@@ -383,6 +395,18 @@ function Shell() {
       {store.toast && (
         <div className="toast" role="status">
           {store.toast}
+          {store.lastDeleted && (
+            <button
+              className="text-button"
+              onClick={() =>
+                void store
+                  .restore(store.lastDeleted)
+                  .catch((e) => store.notify(errorMessage(e)))
+              }
+            >
+              Geri al
+            </button>
+          )}
         </div>
       )}
     </div>

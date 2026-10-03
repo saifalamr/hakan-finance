@@ -1610,3 +1610,84 @@ input[type="date"] {
     scroll-behavior: auto !important;
   }
 }
+
+/* Cash balance, exports and recoverable transactions */
+.current-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.current-balance strong {
+  display: block;
+  font-size: 26px;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 5px;
+}
+.export-section {
+  margin: 16px 0;
+}
+.export-form {
+  margin-top: 12px;
+}
+.date-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.date-pair .field {
+  min-width: 0;
+}
+.date-pair input {
+  width: 100%;
+  min-width: 0;
+}
+.trash-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.trash-row > div {
+  min-width: 0;
+}
+.trash-row strong,
+.trash-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.trash-row button {
+  flex-shrink: 0;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast .text-button {
+  color: inherit;
+  text-decoration: underline;
+  min-height: 44px;
+}
+.current-balance .text-link {
+  max-width: 45%;
+  text-align: right;
+}
+.trash-row .button {
+  min-height: 44px;
+}
+@media (max-width: 380px) {
+  .date-pair {
+    grid-template-columns: 1fr;
+  }
+  .trash-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .current-balance strong {
+    font-size: 22px;
+  }
+}

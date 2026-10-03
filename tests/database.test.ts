@@ -17,6 +17,12 @@ test("PostgreSQL schema, RLS, payroll constraints and relationships", async () =
       ),
     );
     await db.exec(
+      await readFile(
+        "supabase/migrations/20261003184712_finance_improvements.sql",
+        "utf8",
+      ),
+    );
+    await db.exec(
       (await readFile("supabase/setup-admin.sql", "utf8")).replaceAll(
         "ADMIN_USER_UUID",
         admin,
@@ -103,10 +109,60 @@ test("PostgreSQL schema, RLS, payroll constraints and relationships", async () =
       3000000,
     );
     await db.exec(
+      `insert into finance_settings(user_id,opening_balance,opening_date) values ('${admin}',-250050,'2026-10-01')`,
+    );
+    await db.exec(
+      `insert into transactions(user_id,type,amount,employee_id,payroll_kind) values ('${admin}','adjustment',200000,'${employee}','bonus_due')`,
+    );
+    const dueId = (
+      await db.query<{ id: string }>(
+        "select id from transactions where payroll_kind='bonus_due'",
+      )
+    ).rows[0].id;
+    await db.exec(
+      `update transactions set deleted_at=now() where id='${dueId}'`,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "select id from transactions where deleted_at is not null",
+        )
+      ).rows.length,
+      1,
+    );
+    await assert.rejects(
+      db.exec(`delete from transactions where id='${dueId}'`),
+    );
+    await db.exec(
+      `update transactions set deleted_at=null where id='${dueId}'`,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "select id from transactions where deleted_at is not null",
+        )
+      ).rows.length,
+      0,
+    );
+    await assert.rejects(
+      db.exec(
+        `update finance_settings set user_id='${outsider}' where user_id='${admin}'`,
+      ),
+    );
+    await db.exec(
       `select set_config('request.jwt.claim.sub','${outsider}',false)`,
     );
     assert.equal((await db.query("select * from transactions")).rows.length, 0);
     assert.equal((await db.query("select * from app_admin")).rows.length, 0);
+    assert.equal(
+      (await db.query("select * from finance_settings")).rows.length,
+      0,
+    );
+    await assert.rejects(
+      db.exec(
+        `insert into finance_settings(user_id,opening_balance,opening_date) values ('${admin}',1,'2026-10-01')`,
+      ),
+    );
     await assert.rejects(
       db.exec(
         `insert into vehicles(user_id,plate,brand,model) values ('${admin}','BAD','Ford','Transit')`,
@@ -122,6 +178,7 @@ test("PostgreSQL schema, RLS, payroll constraints and relationships", async () =
     );
     await db.exec("set role anon");
     await assert.rejects(db.exec("select * from transactions"));
+    await assert.rejects(db.exec("select * from finance_settings"));
     await db.exec("reset role");
     const security = await db.query<{ count: number }>(
       "select count(*)::int as count from pg_class where relname in ('app_admin','transactions','vehicles','employees','categories','employee_periods') and relrowsecurity",

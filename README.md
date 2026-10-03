@@ -31,7 +31,7 @@ For an isolated **development-only** demo, set `NEXT_PUBLIC_ENABLE_DEMO=true` in
 
 Use a new/dedicated Supabase project for this app.
 
-1. Run `supabase/migrations/20261003153214_finance_mvp.sql` in Supabase SQL Editor (or apply through the Supabase CLI).
+1. Run the SQL migrations in filename order in Supabase SQL Editor (or apply through the Supabase CLI). Existing installations only need `supabase/migrations/20261003184712_finance_improvements.sql`. It preserves existing records. The app remains usable before the upgrade; opening balance, recoverable deletion and unpaid bonuses wait for this migration.
 2. In Authentication → Users, manually create the owner's email/password user. Mark the email confirmed if creating it administratively. Disable **Allow new users to sign up** and anonymous sign-ins. There is no public signup page.
 3. Copy that user's UUID. In `supabase/setup-admin.sql`, replace `ADMIN_USER_UUID` with the UUID and run the script. It registers exactly one admin and adds the ordinary empty finance categories. It inserts no fake cash records.
 4. In Authentication → URL Configuration, set Site URL to the eventual Vercel HTTPS URL. Configure any desired local development URL separately.
@@ -64,6 +64,7 @@ All money is stored as whole **kuruş** in `bigint` (₺2.500,50 = 250050), elim
 | `vehicles`         | Unique plate, brand and model.                                                                                                |
 | `employees`        | Name and default monthly salary/days for future plans.                                                                        |
 | `employee_periods` | One salary/days snapshot per employee/calendar month.                                                                         |
+| `finance_settings` | One signed opening cash balance and effective start date per admin. Owner RLS; no client deletion. |
 | `categories`       | Admin's income and expense categories.                                                                                        |
 
 ### Payroll rules
@@ -71,11 +72,12 @@ All money is stored as whole **kuruş** in `bigint` (₺2.500,50 = 250050), elim
 - Working days are **0–30**, using a fixed 30-day payroll convention. A full month is 30 days, including a 31-day calendar month. Base entitlement = monthly salary ÷ 30 × working days, rounded to the nearest kuruş. Set 30 for a full salaried month.
 - Creating an employee atomically creates the current month's salary plan through a PostgreSQL trigger. For another month, save its plan before recording payroll payments. Each plan can be edited explicitly, changing that month's entitlement. Changing an employee's default salary does not rewrite saved historical plans.
 - **Maaş ödemesi** and **Avans** are expense transactions and reduce the selected month's remaining amount.
-- **Ek ödeme** means an additional entitlement paid immediately: it increases entitlement and paid cash equally, so it does not change the remaining base salary. It is included in cash expenses and total staff payments.
+- **Ödenen prim** means an additional entitlement paid immediately: it increases entitlement and paid cash equally, so it does not change the remaining base salary. It is included in cash expenses and total staff payments.
+- **Prim alacağı** (`bonus_due`) is earned but unpaid: it increases remaining payroll, never cash expenses. When that same bonus is paid, edit its existing record to **Ödenen prim**, keeping its payroll month. Do not add another bonus record, which would count the entitlement twice.
 - **Kesinti** reduces entitlement only; it is stored as `adjustment`, never included in cash expenses/charts/net balance.
 - Remaining = prorated base salary + extra earned − deductions − salary payments − advances − extra paid. Negative remaining is shown as **Fazla Ödeme**.
 - Other transactions with an employee attached appear in the employee's history but do not reduce salary unless a payroll kind is selected. The form labels these **Diğer gider (maaşa dahil değil)**.
-- Payroll month comes from the transaction's date. No automatic carryover or opening cash balance is assumed. **Net Bakiye** is net cash flow for the selected month, not a reconciled bank balance.
+- Payroll month comes from the transaction's date. No automatic payroll carryover is assumed. **Net Bakiye** is net cash flow for the selected month. **Güncel Bakiye** is the configured opening balance before entries on the opening date, plus cash entries from that date through today. Entries before the opening date, future entries, adjustments and deleted entries are excluded.
 
 ## Verification
 
@@ -92,3 +94,13 @@ E2E_PRODUCTION=true npm run test:e2e
 `npm test` executes finance calculations and the actual SQL schema in embedded PostgreSQL (PGlite), including RLS, invalid payroll/category relationships, historical salary preservation, restricted deletion and forbidden user access. Browser tests cover CRUD, employee math, dates/filters, Supabase client requests with a controlled API mock, logout, phone widths 320/360/390/430 and desktop 1440. Production tests verify demo absence, protection of deep links, PWA asset availability and public-only offline cache.
 
 If using a preinstalled Chromium, set `CHROMIUM_EXECUTABLE_PATH`. A live Supabase project's configuration, password login and deployed HTTPS installability should also be checked after provisioning; the embedded database and mocked API tests do not claim to test an unconfigured hosted project.
+
+## Recoverable deletion and Excel export
+
+Transactions move to **Daha Fazla → Silinen İşlemler** with `deleted_at`; they are excluded from all active lists, totals and exports. **Geri al** restores the latest deletion immediately, and the trash list survives reload. Permanent transaction deletion is revoked for authenticated clients. Linked vehicles, staff, salary plans and categories remain protected while a transaction is in trash, so restoring cannot lose its context.
+
+Use **Tekrarla** inside a transaction to open a new transaction with the same amount, category, notes and links, dated today. Review it and save; the original stays intact.
+
+**Excel İndir** on Raporlar/Daha Fazla downloads one `.xlsx` with **Özet, İşlemler, Araçlar, Personel, Kategoriler**. Select an inclusive date range. Cash tabs use exact dates; payroll uses full calendar months intersecting that range, labeled in the workbook. All amounts are numeric TRY values, dates are Excel serials, descriptions are escaped text, and summary/subtotal formulas have cached values. Header rows are frozen, detail sheets have autofilters, rows alternate restrained colors, totals are highlighted. Exports include only actual active app data, and work without the schema upgrade. `public/report-template.xlsx` is a reviewed blank template authored with Artifact Tool, populated in the browser on demand using ZIP/XML utilities. No finance data is uploaded to an export service. Excel decimal/thousands separators follow the reader's Excel locale; Turkish users see Turkish formatting.
+
+No new environment variables are needed for these improvements.

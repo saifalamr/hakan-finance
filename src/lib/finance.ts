@@ -1,5 +1,12 @@
 export type TransactionType = "income" | "expense" | "adjustment";
-export type PayrollKind = "salary_payment" | "advance" | "bonus" | "deduction";
+export type PayrollKind =
+  "salary_payment" | "advance" | "bonus" | "bonus_due" | "deduction";
+export type FinanceSettings = {
+  id: string;
+  user_id: string;
+  opening_balance: number;
+  opening_date: string;
+};
 export type Category = {
   id: string;
   user_id: string;
@@ -40,6 +47,7 @@ export type Transaction = {
   employee_id: string | null;
   payroll_kind: PayrollKind | null;
   created_at: string;
+  deleted_at?: string | null;
 };
 export type Data = {
   transactions: Transaction[];
@@ -47,6 +55,7 @@ export type Data = {
   employees: Employee[];
   categories: Category[];
   employee_periods: PayrollPeriod[];
+  finance_settings?: FinanceSettings[];
 };
 export const emptyData: Data = {
   transactions: [],
@@ -58,7 +67,8 @@ export const emptyData: Data = {
 export const payrollLabels: Record<PayrollKind, string> = {
   salary_payment: "Maaş ödemesi",
   advance: "Avans",
-  bonus: "Ek ödeme",
+  bonus: "Ödenen prim",
+  bonus_due: "Prim alacağı",
   deduction: "Kesinti",
 };
 export const money = (cents: number) =>
@@ -93,6 +103,27 @@ export const inputMoney = (cents: number) =>
     useGrouping: false,
     maximumFractionDigits: 2,
   });
+export function parseBalance(value: string) {
+  const raw = value.trim();
+  if (/^-?0([,.]0{1,2})?$/.test(raw)) return 0;
+  return raw.startsWith("-") ? -parseMoney(raw.slice(1)) : parseMoney(raw);
+}
+// The opening amount is the balance BEFORE entries on opening_date.
+export function cashBalance(
+  settings: FinanceSettings | undefined,
+  transactions: Transaction[],
+  end = today(),
+) {
+  if (!settings || end < settings.opening_date) return null;
+  return (
+    settings.opening_balance +
+    totals(
+      transactions.filter(
+        (t) => t.date >= settings.opening_date && t.date <= end,
+      ),
+    ).net
+  );
+}
 export const today = () =>
   new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Istanbul",
@@ -119,6 +150,7 @@ export function shiftMonth(month: string, offset: number) {
 export const inMonth = (transactions: Transaction[], month: string) =>
   transactions.filter((t) => t.date.startsWith(month));
 export function totals(transactions: Transaction[]) {
+  transactions = transactions.filter((t) => !t.deleted_at);
   const income = transactions
     .filter((t) => t.type === "income")
     .reduce((a, t) => a + t.amount, 0);
@@ -131,6 +163,7 @@ export function payrollSummary(
   period: PayrollPeriod | undefined,
   transactions: Transaction[],
 ) {
+  transactions = transactions.filter((t) => !t.deleted_at);
   const sum = (kind: PayrollKind) =>
     transactions
       .filter((t) => t.payroll_kind === kind)
@@ -141,15 +174,17 @@ export function payrollSummary(
   const advance = sum("advance"),
     salaryPayment = sum("salary_payment"),
     bonus = sum("bonus"),
-    deduction = sum("deduction");
+    deduction = sum("deduction"),
+    bonusDue = sum("bonus_due");
   // Bonus is both an earned addition and a completed cash payment. Deduction has no cash effect.
-  const earned = salary + bonus - deduction,
+  const earned = salary + bonus + bonusDue - deduction,
     paid = advance + salaryPayment + bonus;
   return {
     salary,
     advance,
     salaryPayment,
     bonus,
+    bonusDue,
     deduction,
     earned,
     paid,

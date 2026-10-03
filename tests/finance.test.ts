@@ -9,6 +9,8 @@ import {
   shiftMonth,
   today,
   currentMonth,
+  cashBalance,
+  parseBalance,
   type Transaction,
   type PayrollPeriod,
 } from "../src/lib/finance";
@@ -25,6 +27,50 @@ const transaction = (values: Partial<Transaction>): Transaction => ({
   payroll_kind: null,
   created_at: "",
   ...values,
+});
+test("opening balance uses its inclusive start, excludes deleted and future cash entries", () => {
+  const settings = {
+    id: "s",
+    user_id: "u",
+    opening_balance: 500000,
+    opening_date: "2026-10-01",
+  };
+  const rows = [
+    transaction({ type: "income", amount: 100000, date: "2026-09-30" }),
+    transaction({ type: "income", amount: 200000, date: "2026-10-01" }),
+    transaction({ amount: 250050, date: "2026-10-03" }),
+    transaction({
+      amount: 100000,
+      date: "2026-10-03",
+      deleted_at: "2026-10-03",
+    }),
+    transaction({ amount: 100000, date: "2026-10-05" }),
+    transaction({ type: "adjustment", amount: 100000, date: "2026-10-03" }),
+  ];
+  assert.equal(cashBalance(settings, rows, "2026-10-03"), 449950);
+  assert.equal(cashBalance(settings, rows, "2026-09-30"), null);
+  assert.equal(cashBalance(undefined, rows, "2026-10-03"), null);
+  assert.equal(parseBalance("-2.500,50"), -250050);
+  assert.equal(parseBalance("0"), 0);
+  const due = transaction({
+    type: "adjustment",
+    payroll_kind: "bonus_due",
+    amount: 200000,
+  });
+  const period = { salary: 3000000, work_days: 30 } as PayrollPeriod;
+  assert.equal(payrollSummary(period, [due]).remaining, 3200000);
+  assert.equal(totals([due]).expense, 0);
+  const paid = {
+    ...due,
+    type: "expense" as const,
+    payroll_kind: "bonus" as const,
+  };
+  assert.equal(payrollSummary(period, [paid]).remaining, 3000000);
+  assert.equal(totals([paid]).expense, 200000);
+  assert.equal(
+    payrollSummary(period, [{ ...due, deleted_at: "deleted" }]).remaining,
+    3000000,
+  );
 });
 test("Turkish currency parsing is exact in kuruş and rejects invalid amounts", () => {
   assert.equal(parseMoney("₺12.450,25"), 1245025);

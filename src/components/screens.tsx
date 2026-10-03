@@ -18,6 +18,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
+import { ExcelExport, MoreImprovements } from "./improvements";
 import { useData } from "./data-provider";
 import { EmptyState, MonthPicker, Summary } from "./ui";
 import { type EntityModal, type TransactionPrefill } from "./forms";
@@ -27,6 +28,7 @@ import {
   dateLabel,
   monthLabel,
   money,
+  cashBalance,
   totals,
   inMonth,
   breakdown,
@@ -128,7 +130,9 @@ export function TransactionList({
               </strong>
               <small>
                 {t.type === "adjustment"
-                  ? "Maaş kesintisi"
+                  ? t.payroll_kind === "bonus_due"
+                    ? "Henüz ödenmedi"
+                    : "Maaş kesintisi"
                   : category?.name || "Diğer"}
               </small>
             </div>
@@ -163,6 +167,24 @@ export function Dashboard({ actions }: { actions: Actions }) {
         </button>
       </div>
       <Summary {...total} />
+      <section className="panel current-balance">
+        <div>
+          <span className="small muted">Güncel Bakiye</span>
+          <strong>
+            {cashBalance(data.finance_settings?.[0], data.transactions) === null
+              ? "Belirlenmedi"
+              : money(
+                  cashBalance(data.finance_settings?.[0], data.transactions)!,
+                )}
+          </strong>
+        </div>
+        <Link href="/daha-fazla" className="text-link">
+          {data.finance_settings?.length
+            ? "Başlangıç bakiyesi"
+            : "Başlangıç bakiyesi belirle"}
+          <ChevronRight size={15} />
+        </Link>
+      </section>
       <div className="dashboard-grid">
         <section className="panel cash-panel">
           <div className="section-heading">
@@ -565,7 +587,7 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
   );
 }
 export function Employees({ actions, id }: { actions: Actions; id?: string }) {
-  const { data } = useData();
+  const { data, upgradeReady } = useData();
   const [month, setMonth] = useState(currentMonth());
   const employee = data.employees.find((e) => e.id === id);
   const employeeSummary = (employeeId: string) => {
@@ -686,8 +708,12 @@ export function Employees({ actions, id }: { actions: Actions; id?: string }) {
                   <strong>{money(summary.salaryPayment)}</strong>
                 </div>
                 <div>
-                  <span>Ek Ödeme</span>
+                  <span>Ödenen Prim</span>
                   <strong>{money(summary.bonus)}</strong>
+                </div>
+                <div>
+                  <span>Prim Alacağı</span>
+                  <strong>{money(summary.bonusDue)}</strong>
                 </div>
                 <div>
                   <span>Kesinti</span>
@@ -699,24 +725,26 @@ export function Employees({ actions, id }: { actions: Actions; id?: string }) {
                 </div>
               </div>
               <div className="payroll-actions">
-                {Object.entries(payrollLabels).map(([kind, label]) => (
-                  <button
-                    className="button secondary"
-                    key={kind}
-                    onClick={() =>
-                      actions.add({
-                        employee_id: employee.id,
-                        payroll_kind:
-                          kind as TransactionPrefill["payroll_kind"],
-                        date:
-                          month === currentMonth() ? today() : `${month}-01`,
-                      })
-                    }
-                  >
-                    <Plus size={15} />
-                    {label}
-                  </button>
-                ))}
+                {Object.entries(payrollLabels)
+                  .filter(([key]) => upgradeReady || key !== "bonus_due")
+                  .map(([kind, label]) => (
+                    <button
+                      className="button secondary"
+                      key={kind}
+                      onClick={() =>
+                        actions.add({
+                          employee_id: employee.id,
+                          payroll_kind:
+                            kind as TransactionPrefill["payroll_kind"],
+                          date:
+                            month === currentMonth() ? today() : `${month}-01`,
+                        })
+                      }
+                    >
+                      <Plus size={15} />
+                      {label}
+                    </button>
+                  ))}
               </div>
             </>
           )}
@@ -845,6 +873,7 @@ export function Reports() {
         </div>
       </div>
       <MonthPicker month={month} onChange={setMonth} />
+      <ExcelExport month={month} />
       <Summary {...totals(monthly)} />
       <section className="panel">
         <div className="section-heading">
@@ -982,6 +1011,7 @@ export function More({ actions }: { actions: Actions }) {
           </div>
         )}
       </section>
+      <MoreImprovements />
       {demo && (
         <section className="panel">
           <div className="section-heading">
