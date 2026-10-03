@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo, useDeferredValue } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
@@ -66,17 +66,31 @@ export function TransactionList({
   limit?: number;
 }) {
   const { data } = useData();
-  const list = [...transactions].sort(
-    (a, b) =>
-      b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at),
+  const [visible, setVisible] = useState(40);
+  const list = useMemo(
+    () =>
+      [...transactions].sort(
+        (a, b) =>
+          b.date.localeCompare(a.date) ||
+          b.created_at.localeCompare(a.created_at),
+      ),
+    [transactions],
+  );
+  const names = useMemo(
+    () => ({
+      categories: new Map(data.categories.map((row) => [row.id, row])),
+      vehicles: new Map(data.vehicles.map((row) => [row.id, row])),
+      employees: new Map(data.employees.map((row) => [row.id, row])),
+    }),
+    [data.categories, data.vehicles, data.employees],
   );
   if (!list.length) return <EmptyState />;
   return (
     <div className="transaction-list">
-      {list.slice(0, limit ?? list.length).map((t) => {
-        const category = data.categories.find((c) => c.id === t.category_id);
-        const vehicle = data.vehicles.find((v) => v.id === t.vehicle_id);
-        const employee = data.employees.find((e) => e.id === t.employee_id);
+      {list.slice(0, limit ?? visible).map((t) => {
+        const category = names.categories.get(t.category_id || "");
+        const vehicle = names.vehicles.get(t.vehicle_id || "");
+        const employee = names.employees.get(t.employee_id || "");
         const label = t.payroll_kind
           ? payrollLabels[t.payroll_kind]
           : category?.name || "İşlem";
@@ -139,13 +153,24 @@ export function TransactionList({
           </button>
         );
       })}
+      {!limit && list.length > visible && (
+        <button
+          className="button secondary"
+          onClick={() => setVisible((n) => n + 40)}
+        >
+          Daha fazla göster
+        </button>
+      )}
     </div>
   );
 }
 export function Dashboard({ actions }: { actions: Actions }) {
   const { data } = useData();
   const month = currentMonth();
-  const monthly = inMonth(data.transactions, month);
+  const monthly = useMemo(
+    () => inMonth(data.transactions, month),
+    [data.transactions, month],
+  );
   const total = totals(monthly);
   const categories = Object.fromEntries(
     data.categories.map((c) => [c.id, c.name]),
@@ -254,14 +279,33 @@ export function Transactions({ actions }: { actions: Actions }) {
     [employee, setEmployee] = useState(""),
     [showFilters, setShowFilters] = useState(false),
     [limit, setLimit] = useState(40);
-  const filtered = filterDates(data.transactions, filter, start, end).filter(
-    (t) =>
-      (direction === "all" || t.type === direction) &&
-      (!vehicle || t.vehicle_id === vehicle) &&
-      (!employee || t.employee_id === employee) &&
-      `${t.description} ${data.categories.find((c) => c.id === t.category_id)?.name || ""} ${t.payroll_kind ? payrollLabels[t.payroll_kind] : ""}`
-        .toLocaleLowerCase("tr-TR")
-        .includes(search.toLocaleLowerCase("tr-TR")),
+  const deferredSearch = useDeferredValue(search.toLocaleLowerCase("tr-TR"));
+  const categoryNames = useMemo(
+    () => new Map(data.categories.map((c) => [c.id, c.name])),
+    [data.categories],
+  );
+  const filtered = useMemo(
+    () =>
+      filterDates(data.transactions, filter, start, end).filter(
+        (t) =>
+          (direction === "all" || t.type === direction) &&
+          (!vehicle || t.vehicle_id === vehicle) &&
+          (!employee || t.employee_id === employee) &&
+          `${t.description} ${categoryNames.get(t.category_id || "") || ""} ${t.payroll_kind ? payrollLabels[t.payroll_kind] : ""}`
+            .toLocaleLowerCase("tr-TR")
+            .includes(deferredSearch),
+      ),
+    [
+      data.transactions,
+      filter,
+      start,
+      end,
+      direction,
+      vehicle,
+      employee,
+      categoryNames,
+      deferredSearch,
+    ],
   );
   return (
     <>

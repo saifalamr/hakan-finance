@@ -28,7 +28,9 @@ export function ExcelExport({ month }: { month: string }) {
     setBusy(true);
     setError("");
     try {
-      await (await import("@/lib/excel")).downloadReport(data, start, end);
+      await (
+        await import("@/lib/excel-download")
+      ).downloadReport(data, start, end);
       notify("Excel raporu indirildi.");
       setOpen(false);
     } catch (e) {
@@ -187,6 +189,7 @@ export function OpeningBalance() {
 export function Trash() {
   const { trash, restore, data, notify } = useData();
   const [busy, setBusy] = useState("");
+  const [visible, setVisible] = useState(40);
   async function recover(id: string) {
     setBusy(id);
     try {
@@ -214,6 +217,7 @@ export function Trash() {
             .sort((a, b) =>
               (b.deleted_at || "").localeCompare(a.deleted_at || ""),
             )
+            .slice(0, visible)
             .map((t) => (
               <div key={t.id} className="trash-row">
                 <div>
@@ -239,6 +243,14 @@ export function Trash() {
                 </button>
               </div>
             ))}
+          {trash.length > visible && (
+            <button
+              className="button secondary"
+              onClick={() => setVisible((n) => n + 40)}
+            >
+              Daha fazla göster
+            </button>
+          )}
         </div>
       )}
     </section>

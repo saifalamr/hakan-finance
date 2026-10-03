@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -43,6 +44,14 @@ const Context = createContext<Store | null>(null);
 const DEMO_KEY = "finance-development-demo-v1";
 export function errorMessage(error: unknown): string {
   const e = error as PostgrestError;
+  if (e?.code === "53100" || e?.code === "25006")
+    return "Veritabanı yeni kayıt kabul etmiyor. Supabase kapasitesini kontrol edin.";
+  if (
+    e?.message?.includes("AbortError") ||
+    e?.message?.includes("TimeoutError") ||
+    e?.details?.includes("TimeoutError")
+  )
+    return "Bağlantı zaman aşımına uğradı. Tekrar kaydetmeden önce yenileyip kaydın oluşup oluşmadığını kontrol edin.";
   if (e?.code === "23503")
     return "Bu kayıt işlemlerde kullanılıyor. Önce bağlı işlemleri kaldırın.";
   if (e?.code === "23505") return "Bu kayıt zaten mevcut.";
@@ -56,19 +65,28 @@ export function errorMessage(error: unknown): string {
     ? error.message
     : "İşlem tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin.";
 }
-async function readAll(table: Table) {
+async function readAll(table: Table, userId: string, signal: AbortSignal) {
   const rows: Record<string, unknown>[] = [];
-  let offset = 0;
+  let cursor = "";
   while (true) {
-    const { data, error } = await supabase!
+    let query = supabase!
       .from(table)
       .select("*")
+      .eq("user_id", userId)
       .order("id")
-      .range(offset, offset + 499);
+      .limit(500)
+      .abortSignal(signal);
+    if (cursor) query = query.gt("id", cursor);
+    const { data, error } = await query;
     if (error) throw error;
     rows.push(...data);
     if (data.length < 500) break;
-    offset += 500;
+    const next = String(data[data.length - 1].id);
+    if (next <= cursor)
+      throw new Error("Kayıtlar yüklenemedi. Yeniden deneyin.");
+    cursor = next;
+    // Yield between pages so taps and paints are not blocked by a large history.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
   return rows;
 }
@@ -84,57 +102,93 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [upgradeReady, setUpgradeReady] = useState(false),
     [lastDeleted, setLastDeleted] = useState("");
   const sequence = useRef(0);
+  const authSequence = useRef(0);
   const authenticatedUser = useRef("");
+  const reading = useRef<{
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null>(null);
+  const writing = useRef(false);
+  const cancelRead = () => {
+    reading.current?.controller.abort();
+    reading.current = null;
+    sequence.current++;
+    setLoading(false);
+  };
+  useEffect(() => () => reading.current?.controller.abort(), []);
   const notify = useCallback((message: string) => setToast(message), []);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
-  const refresh = useCallback(async () => {
-    if (demo) return;
+  const refresh = useCallback((): Promise<void> => {
+    if (demo || !userId || writing.current) return Promise.resolve();
+    if (reading.current) return reading.current.promise;
     const run = ++sequence.current;
+    const controller = new AbortController();
+    // A finite total budget prevents a stalled multi-page load from spinning forever.
+    const deadline = setTimeout(() => controller.abort(), 90000);
     setLoading(true);
     setLoadError("");
-    try {
-      const tables: Table[] = [
-        "transactions",
-        "vehicles",
-        "employees",
-        "categories",
-        "employee_periods",
-      ];
-      const rows = await Promise.all(tables.map(readAll));
-      let settings: Record<string, unknown>[] = [];
-      let upgraded = false;
+    const promise = (async () => {
       try {
-        settings = await readAll("finance_settings");
-        upgraded = true;
+        const tables: Table[] = [
+          "transactions",
+          "vehicles",
+          "employees",
+          "categories",
+          "employee_periods",
+        ];
+        const settingsPromise = readAll(
+          "finance_settings",
+          userId,
+          controller.signal,
+        )
+          .then((rows) => ({ rows, upgraded: true }))
+          .catch((error) => {
+            const code = (error as PostgrestError).code;
+            if (code !== "42P01" && code !== "PGRST205") throw error;
+            return { rows: [], upgraded: false };
+          });
+        const [rows, settings] = await Promise.all([
+          Promise.all(
+            tables.map((table) => readAll(table, userId, controller.signal)),
+          ),
+          settingsPromise,
+        ]);
+        if (sequence.current === run) {
+          setUpgradeReady(settings.upgraded);
+          setData({
+            ...Object.fromEntries(tables.map((table, i) => [table, rows[i]])),
+            finance_settings: settings.rows,
+          } as Data);
+          setLoaded(true);
+        }
       } catch (error) {
-        const code = (error as PostgrestError).code;
-        if (code !== "42P01" && code !== "PGRST205") throw error;
+        if (sequence.current === run)
+          setLoadError(
+            controller.signal.aborted
+              ? "Yükleme zaman aşımına uğradı. Bağlantınızı kontrol edip yeniden deneyin."
+              : errorMessage(error),
+          );
+      } finally {
+        clearTimeout(deadline);
+        controller.abort();
+        if (reading.current?.controller === controller) reading.current = null;
+        if (sequence.current === run) setLoading(false);
       }
-      if (sequence.current === run) {
-        setUpgradeReady(upgraded);
-        setData({
-          ...Object.fromEntries(tables.map((table, i) => [table, rows[i]])),
-          finance_settings: settings,
-        } as Data);
-        setLoaded(true);
-      }
-    } catch (error) {
-      if (sequence.current === run) setLoadError(errorMessage(error));
-    } finally {
-      if (sequence.current === run) setLoading(false);
-    }
-  }, [demo]);
+    })();
+    reading.current = { controller, promise };
+    return promise;
+  }, [demo, userId]);
   useEffect(() => {
     if (!supabase) return;
     let active = true;
     const check = async () => {
-      const run = ++sequence.current;
+      const run = ++authSequence.current;
       const { data: auth, error } = await supabase!.auth.getUser();
-      if (!active || sequence.current !== run) return;
+      if (!active || authSequence.current !== run) return;
       if (error && error.name !== "AuthSessionMissingError")
         setLoadError("Oturum doğrulanamadı. Bağlantınızı kontrol edin.");
       if (auth.user) {
@@ -143,12 +197,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
           .select("user_id")
           .eq("user_id", auth.user.id)
           .maybeSingle();
-        if (!active || sequence.current !== run) return;
+        if (!active || authSequence.current !== run) return;
         if (adminError || !admin) {
           setLoadError("Bu hesap yönetici olarak tanımlanmamış.");
           setUserId("");
         } else {
-          if (authenticatedUser.current !== auth.user.id) setLoading(true);
+          if (authenticatedUser.current !== auth.user.id) {
+            reading.current?.controller.abort();
+            reading.current = null;
+            sequence.current++;
+            setData(emptyData);
+            setLoaded(false);
+            setLoading(true);
+          }
           authenticatedUser.current = auth.user.id;
           setUserId(auth.user.id);
           setLoadError("");
@@ -162,7 +223,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     void check();
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT" && active) {
+        reading.current?.controller.abort();
+        reading.current = null;
         sequence.current++;
+        authSequence.current++;
         authenticatedUser.current = "";
         setUserId("");
         setData(emptyData);
@@ -246,26 +310,68 @@ export function DataProvider({ children }: { children: ReactNode }) {
       persist(next);
       return;
     }
-    const query =
-      table === "finance_settings"
-        ? supabase!
-            .from(table)
-            .upsert({ ...values, user_id: userId }, { onConflict: "user_id" })
-        : table === "employee_periods"
+    if (writing.current)
+      throw new Error("Önceki kayıt tamamlanıyor. Lütfen bekleyin.");
+    writing.current = true;
+    cancelRead();
+    const owner = userId;
+    try {
+      const query =
+        table === "finance_settings"
           ? supabase!
               .from(table)
-              .upsert(
-                { ...values, user_id: userId },
-                { onConflict: "user_id,employee_id,month" },
-              )
-          : id
-            ? supabase!.from(table).update(values).eq("id", id)
-            : supabase!.from(table).insert({ ...values, user_id: userId });
-    const { data: saved, error } = await query.select("id");
-    if (error) throw error;
-    if (!saved?.length)
-      throw new Error("Kayıt kaydedilemedi. Yetkinizi kontrol edin.");
-    await refresh();
+              .upsert({ ...values, user_id: userId }, { onConflict: "user_id" })
+          : table === "employee_periods"
+            ? supabase!
+                .from(table)
+                .upsert(
+                  { ...values, user_id: userId },
+                  { onConflict: "user_id,employee_id,month" },
+                )
+            : id
+              ? supabase!.from(table).update(values).eq("id", id)
+              : supabase!.from(table).insert({ ...values, user_id: userId });
+      const { data: saved, error } = await query.select("*");
+      if (error) throw error;
+      if (!saved?.length)
+        throw new Error("Kayıt kaydedilemedi. Yetkinizi kontrol edin.");
+      if (authenticatedUser.current !== owner) return;
+      setData((previous) => {
+        const next = { ...previous };
+        const ids = new Set(saved.map((row) => row.id));
+        next[table] = [
+          ...(previous[table] || []).filter((row) => !ids.has(row.id)),
+          ...saved,
+        ] as never;
+        return next;
+      });
+      setLoadError("");
+      // Creating an employee also creates the current payroll period via a DB trigger.
+      if (table === "employees" && !id) {
+        const { data: periods, error: periodError } = await supabase!
+          .from("employee_periods")
+          .select("*")
+          .eq("employee_id", saved[0].id)
+          .eq("user_id", owner);
+        if (authenticatedUser.current !== owner) return;
+        if (periodError)
+          setLoadError(
+            "Personel kaydedildi. Maaş planını görmek için yenileyin.",
+          );
+        else
+          setData((previous) => ({
+            ...previous,
+            employee_periods: [
+              ...previous.employee_periods.filter(
+                (p) => p.employee_id !== saved[0].id,
+              ),
+              ...(periods || []),
+            ],
+          }));
+      }
+    } finally {
+      writing.current = false;
+    }
   }
   async function remove(table: Table, id: string) {
     if (table === "transactions") {
@@ -296,14 +402,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
       persist(next);
       return;
     }
-    const { data: deleted, error } = await supabase!
-      .from(table)
-      .delete()
-      .eq("id", id)
-      .select("id");
-    if (error) throw error;
-    if (!deleted?.length) throw new Error("Kayıt silinemedi.");
-    await refresh();
+    if (writing.current)
+      throw new Error("Önceki kayıt tamamlanıyor. Lütfen bekleyin.");
+    writing.current = true;
+    cancelRead();
+    const owner = userId;
+    try {
+      const { data: deleted, error } = await supabase!
+        .from(table)
+        .delete()
+        .eq("id", id)
+        .select("id");
+      if (error) throw error;
+      if (!deleted?.length) throw new Error("Kayıt silinemedi.");
+      if (authenticatedUser.current !== owner) return;
+      setData((previous) => ({
+        ...previous,
+        [table]: (previous[table] || []).filter((row) => row.id !== id),
+        employee_periods:
+          table === "employees"
+            ? previous.employee_periods.filter((p) => p.employee_id !== id)
+            : previous.employee_periods,
+      }));
+      setLoadError("");
+    } finally {
+      writing.current = false;
+    }
   }
   async function restore(id: string) {
     await save("transactions", { deleted_at: null }, id);
@@ -315,7 +439,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
     }
-    sequence.current++;
+    cancelRead();
+    authSequence.current++;
+    authenticatedUser.current = "";
     setUserId("");
     setData(emptyData);
     setLastDeleted("");
@@ -324,14 +450,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setLoaded(false);
     setLoadError("");
   }
+  const activeData = useMemo(
+    () => ({
+      ...data,
+      transactions: data.transactions.filter((t) => !t.deleted_at),
+    }),
+    [data],
+  );
+  const trash = useMemo(
+    () => data.transactions.filter((t) => t.deleted_at),
+    [data.transactions],
+  );
   return (
     <Context.Provider
       value={{
-        data: {
-          ...data,
-          transactions: data.transactions.filter((t) => !t.deleted_at),
-        },
-        trash: data.transactions.filter((t) => t.deleted_at),
+        data: activeData,
+        trash,
         upgradeReady,
         lastDeleted,
         restore,

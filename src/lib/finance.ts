@@ -150,13 +150,13 @@ export function shiftMonth(month: string, offset: number) {
 export const inMonth = (transactions: Transaction[], month: string) =>
   transactions.filter((t) => t.date.startsWith(month));
 export function totals(transactions: Transaction[]) {
-  transactions = transactions.filter((t) => !t.deleted_at);
-  const income = transactions
-    .filter((t) => t.type === "income")
-    .reduce((a, t) => a + t.amount, 0);
-  const expense = transactions
-    .filter((t) => t.type === "expense")
-    .reduce((a, t) => a + t.amount, 0);
+  let income = 0,
+    expense = 0;
+  for (const t of transactions) {
+    if (t.deleted_at) continue;
+    if (t.type === "income") income += t.amount;
+    else if (t.type === "expense") expense += t.amount;
+  }
   return { income, expense, net: income - expense };
 }
 export function payrollSummary(
@@ -213,17 +213,23 @@ export function dailyChart(transactions: Transaction[], month: string) {
     Number(month.slice(5)),
     0,
   ).getDate();
-  return Array.from({ length: days }, (_, i) => {
-    const day = String(i + 1).padStart(2, "0");
-    const total = totals(
-      transactions.filter((t) => t.date === `${month}-${day}`),
-    );
-    return {
-      day: String(i + 1),
-      Gelir: total.income / 100,
-      Gider: total.expense / 100,
-    };
-  });
+  const chart = Array.from({ length: days }, (_, i) => ({
+    day: String(i + 1),
+    Gelir: 0,
+    Gider: 0,
+  }));
+  for (const t of transactions) {
+    if (t.deleted_at || !t.date.startsWith(month + "-")) continue;
+    const row = chart[Number(t.date.slice(8, 10)) - 1];
+    if (!row) continue;
+    if (t.type === "income") row.Gelir += t.amount;
+    else if (t.type === "expense") row.Gider += t.amount;
+  }
+  return chart.map((row) => ({
+    ...row,
+    Gelir: row.Gelir / 100,
+    Gider: row.Gider / 100,
+  }));
 }
 export type DateFilter = "today" | "week" | "month" | "custom";
 export function filterDates(

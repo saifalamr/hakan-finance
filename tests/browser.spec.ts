@@ -342,6 +342,9 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
       },
     ],
   };
+  let reads = 0;
+  let failRefresh = false;
+  const cursors: (string | null)[] = [];
   await page.route("http://127.0.0.1:54321/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -360,6 +363,16 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
       return;
     } else if (url.pathname.startsWith("/rest/v1/")) {
       const table = url.pathname.split("/").at(-1)!;
+      if (request.method() === "GET" && table !== "app_admin") {
+        reads++;
+        if (failRefresh && table === "transactions") {
+          await route.fulfill({
+            status: 503,
+            json: { message: "temporary failure" },
+          });
+          return;
+        }
+      }
       if (table === "finance_settings") {
         await route.fulfill({
           status: 404,
@@ -377,7 +390,17 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
         };
         rows[table].push(saved);
         body = [saved];
-      } else body = rows[table];
+      } else {
+        const cursor = url.searchParams.get("id");
+        if (table === "transactions") cursors.push(cursor);
+        expect(url.searchParams.has("offset")).toBe(false);
+        const selected = [...(rows[table] as { id: string }[])].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        );
+        body = selected
+          .filter((row) => !cursor || row.id > cursor.slice(3))
+          .slice(0, Number(url.searchParams.get("limit") || 500));
+      }
     }
     await route.fulfill({ json: body });
   });
@@ -395,16 +418,59 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
     .getByRole("button", { name: "İşlem Ekle", exact: true })
     .last()
     .click();
+  const readsBeforeSave = reads;
   await page.getByLabel("Tutar (₺)").fill("1250");
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".transaction-row")).toContainText("₺1.250,00");
   expect(rows.transactions).toHaveLength(1);
+  expect(reads).toBe(readsBeforeSave);
+  failRefresh = true;
+  await page
+    .getByRole("button", { name: "Yenile", exact: true })
+    .last()
+    .click();
+  await expect(
+    page.getByText("Son yüklenen kayıtlar gösteriliyor."),
+  ).toBeVisible();
+  await expect(page.locator(".transaction-row")).toContainText("₺1.250,00");
+  failRefresh = false;
+  await page.getByRole("button", { name: "Yeniden dene", exact: true }).click();
+  await expect(
+    page.getByText("Son yüklenen kayıtlar gösteriliyor."),
+  ).toHaveCount(0);
   expect(rows.transactions[0]).toMatchObject({
     amount: 125000,
     user_id: user.id,
     date: today(),
   });
+  const original = rows.transactions[0] as Record<string, unknown>;
+  rows.transactions.push(
+    ...Array.from({ length: 1000 }, (_, i) => ({
+      ...original,
+      id: `00000000-0000-0000-0001-${String(i).padStart(12, "0")}`,
+      amount: 1,
+    })),
+  );
+  cursors.length = 0;
+  await page
+    .getByRole("button", { name: "Yenile", exact: true })
+    .last()
+    .click();
+  await expect(
+    page.getByText("₺1.260,00", { exact: true }).first(),
+  ).toBeVisible();
+  expect(cursors).toHaveLength(3);
+  expect(cursors[0]).toBeNull();
+  expect(cursors[1]).toMatch(/^gt\./);
+  expect(cursors[2]).toMatch(/^gt\./);
+  await nav(page, "İşlemler");
+  await expect(page.getByRole("heading", { name: "1001 işlem" })).toBeVisible();
+  await expect(page.locator(".transaction-row")).toHaveCount(40);
+  await page
+    .getByRole("button", { name: "Daha fazla göster", exact: true })
+    .click();
+  await expect(page.locator(".transaction-row")).toHaveCount(80);
   await page
     .getByRole("button", { name: "Çıkış Yap", exact: true })
     .last()
@@ -413,4 +479,62 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
     page.getByRole("button", { name: "Giriş Yap", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Son İşlemler", { exact: true })).toHaveCount(0);
+});
+
+test("10,000-row Excel export leaves touch forms usable and renders bounded lists", async ({
+  page,
+}) => {
+  const { makeDemo } = await import("../src/lib/demo");
+  const data = makeDemo();
+  data.transactions = Array.from({ length: 10000 }, (_, i) => ({
+    ...data.transactions[0],
+    id: `large-${i}`,
+    description: `Yerel yük testi ${i}`,
+  }));
+  await page.addInitScript(
+    (fixture) =>
+      localStorage.setItem(
+        "finance-development-demo-v1",
+        JSON.stringify(fixture),
+      ),
+    data,
+  );
+  await demo(page);
+  await nav(page, "İşlemler");
+  await expect(page.locator(".transaction-row")).toHaveCount(40);
+  await expect(
+    page.getByRole("heading", { name: "10000 işlem" }),
+  ).toBeVisible();
+  await nav(page, "Daha Fazla");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/report-template.xlsx", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Excel İndir", exact: true }).click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Raporu indir", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Hazırlanıyor…", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "İşlem Ekle", exact: true })
+    .last()
+    .click();
+  await page.getByLabel("Tutar (₺)").fill("99,50");
+  await expect(page.getByLabel("Tutar (₺)")).toHaveValue("99,50");
+  await noOverflow(page);
+  await page.getByRole("button", { name: "Kapat", exact: true }).click();
+  release();
+  const download = await downloadPromise;
+  const { readFile } = await import("node:fs/promises");
+  const { unzipSync, strFromU8 } = await import("fflate");
+  const zip = unzipSync(await readFile((await download.path())!));
+  const xml = strFromU8(zip["xl/worksheets/sheet2.xml"]);
+  expect(xml).toContain('autoFilter ref="A5:I10005"');
+  expect(xml).toContain("Yerel yük testi 9999");
+  await expect(page.getByText("Excel raporu indirildi.")).toBeVisible();
 });

@@ -23,8 +23,6 @@ const escape = (value: string) =>
 const col = (i: number) => String.fromCharCode(65 + i);
 const serial = (date: string) =>
   (Date.parse(date + "T00:00:00Z") - Date.UTC(1899, 11, 30)) / 86400000;
-const sum = (rows: Transaction[], kind: "income" | "expense") =>
-  rows.filter((t) => t.type === kind).reduce((a, t) => a + t.amount, 0) / 100;
 export function reportRows(data: Data, start: string, end: string) {
   if (
     !/^\d{4}-\d{2}-\d{2}$/.test(start) ||
@@ -63,23 +61,37 @@ export function reportRows(data: Data, start: string, end: string) {
       ? (t.payroll_kind === "deduction" ? -t.amount : t.amount) / 100
       : 0,
   ]);
+  const vehicleTotals = new Map<string, number>(),
+    categoryTotals = new Map<string, number>();
+  for (const t of transactions) {
+    if (t.type !== "expense") continue;
+    if (t.vehicle_id)
+      vehicleTotals.set(
+        t.vehicle_id,
+        (vehicleTotals.get(t.vehicle_id) || 0) + t.amount,
+      );
+    if (t.category_id)
+      categoryTotals.set(
+        t.category_id,
+        (categoryTotals.get(t.category_id) || 0) + t.amount,
+      );
+  }
   const vehicleRows: Cell[][] = data.vehicles.map((v) => [
     v.plate,
     `${v.brand} ${v.model}`,
-    sum(
-      transactions.filter((t) => t.vehicle_id === v.id),
-      "expense",
-    ),
+    (vehicleTotals.get(v.id) || 0) / 100,
   ]);
   const categoryRows: Cell[][] = data.categories
     .filter((c) => c.type === "expense")
-    .map((c) => [
-      c.name,
-      sum(
-        transactions.filter((t) => t.category_id === c.id),
-        "expense",
-      ),
-    ]);
+    .map((c) => [c.name, (categoryTotals.get(c.id) || 0) / 100]);
+  const payrollRows = new Map<string, Transaction[]>();
+  for (const t of data.transactions) {
+    if (!t.employee_id || t.deleted_at) continue;
+    const key = `${t.employee_id}:${t.date.slice(0, 7)}`;
+    const bucket = payrollRows.get(key);
+    if (bucket) bucket.push(t);
+    else payrollRows.set(key, [t]);
+  }
   // Payroll entitlements and outstanding amounts always use full calendar months.
   // Cash totals on Özet/İşlemler use the exact selected days.
   const staff: Cell[][] = data.employee_periods
@@ -92,11 +104,7 @@ export function reportRows(data: Data, start: string, end: string) {
     .map((p) => {
       const summary = payrollSummary(
         p,
-        data.transactions.filter(
-          (t) =>
-            t.employee_id === p.employee_id &&
-            t.date.startsWith(p.month.slice(0, 7)),
-        ),
+        payrollRows.get(`${p.employee_id}:${p.month.slice(0, 7)}`) || [],
       );
       return [
         p.month.slice(0, 7),
@@ -167,13 +175,18 @@ export function buildReport(
     ];
     const getRow = (n: number) =>
       originalRows.find((r) => Number(r[1]) === n)?.[0] || "";
-    const styles = (n: number) =>
-      new Map(
+    const styleCache = new Map<number, Map<string, string>>();
+    const styles = (n: number) => {
+      if (styleCache.has(n)) return styleCache.get(n)!;
+      const result = new Map(
         [...getRow(n).matchAll(/<c\b[^>]*r="([A-Z]+)\d+"[^>]*>/g)].map((m) => [
           m[1],
           /\bs="(\d+)"/.exec(m[0])?.[1] || "0",
         ]),
       );
+      styleCache.set(n, result);
+      return result;
+    };
     const makeRow = (n: number, values: Cell[], styleRow: number) => {
       const format = styles(styleRow);
       const height =
@@ -245,26 +258,4 @@ export function buildReport(
     archive[path] = strToU8(xml);
   }
   return zipSync(archive, { level: 6 });
-}
-export async function downloadReport(data: Data, start: string, end: string) {
-  const response = await fetch("/report-template.xlsx");
-  if (!response.ok)
-    throw new Error("Excel şablonu yüklenemedi. Yeniden deneyin.");
-  const bytes = buildReport(
-    new Uint8Array(await response.arrayBuffer()),
-    data,
-    start,
-    end,
-  );
-  const blob = new Blob([new Uint8Array(bytes).buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob),
-    link = document.createElement("a");
-  link.href = url;
-  link.download = `finans-${start}_${end}.xlsx`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }

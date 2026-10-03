@@ -297,6 +297,19 @@ function Shell() {
           </div>
         )}
         <main className="main-content" id="main-content">
+          {store.loaded && store.loadError && (
+            <div role="alert" className="panel">
+              <p>{store.loadError}</p>
+              <p className="small muted">Son yüklenen kayıtlar gösteriliyor.</p>
+              <button
+                className="button secondary"
+                disabled={store.loading}
+                onClick={() => void store.refresh()}
+              >
+                Yeniden dene
+              </button>
+            </div>
+          )}
           {store.loading && !store.loaded ? (
             <div className="loading-content">
               <div className="skeleton heading-skeleton" />
@@ -308,7 +321,7 @@ function Shell() {
               <div className="skeleton panel chart-frame" />
               <p className="muted">Kayıtlar yükleniyor…</p>
             </div>
-          ) : store.loadError ? (
+          ) : store.loadError && !store.loaded ? (
             <section className="panel">
               <EmptyState
                 title="Kayıtlar yüklenemedi"
