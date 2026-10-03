@@ -41,7 +41,14 @@ export function TransactionForm({
   const [kind, setKind] = useState<PayrollKind | "">(
     transaction?.payroll_kind || prefill?.payroll_kind || "",
   );
-  const [category, setCategory] = useState(transaction?.category_id || "");
+  const [category, setCategory] = useState(
+    transaction?.category_id ||
+      (prefill?.employee_id && prefill?.payroll_kind
+        ? data.categories.find(
+            (c) => c.name === "Personel" && c.type === "expense",
+          )?.id || ""
+        : ""),
+  );
   const [advanced, setAdvanced] = useState(
     Boolean(transaction || prefill?.vehicle_id || prefill?.employee_id),
   );
