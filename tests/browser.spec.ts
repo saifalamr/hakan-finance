@@ -795,6 +795,17 @@ test("vehicle documents: expiry priorities, date edits, private upload/replace/r
   page,
 }) => {
   test.setTimeout(90000);
+  // Model a busy phone: chart measurement may arrive after the viewport changes.
+  await page.addInitScript(() => {
+    const NativeObserver = window.ResizeObserver;
+    window.ResizeObserver = class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) =>
+          setTimeout(() => callback(entries, observer), 150),
+        );
+      }
+    };
+  });
   const { businessAPI } = await import("./business-browser-fixture");
   const { admin } = await import("./business-fixture");
   const api = await businessAPI(page);

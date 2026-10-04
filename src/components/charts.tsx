@@ -177,7 +177,7 @@ export function MonthlyChart({
         </span>
       </div>
       <div
-        className="chart-frame"
+        className={`chart-frame${expenseOnly ? " vehicle-trend-chart" : ""}`}
         role="img"
         aria-label={
           expenseOnly

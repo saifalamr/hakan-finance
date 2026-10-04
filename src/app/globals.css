@@ -2411,3 +2411,9 @@ input[type="date"] {
   .document-date-fields { grid-template-columns: minmax(0, 1fr); }
   .fleet-document-warning { max-width: 122px; }
 }
+
+/* ResizeObserver can lag behind a phone rotation; bound the existing vehicle SVG immediately. */
+.vehicle-trend-chart .recharts-wrapper,
+.vehicle-trend-chart .recharts-surface {
+  max-width: 100%;
+}
