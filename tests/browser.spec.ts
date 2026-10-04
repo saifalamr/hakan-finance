@@ -382,7 +382,7 @@ test("authenticated Supabase API reads and writes, logout closes protected conte
           return;
         }
       }
-      if (table === "finance_settings") {
+      if (table === "finance_settings" || table === "vehicle_documents") {
         await route.fulfill({
           status: 404,
           json: { code: "PGRST205", message: "table not found" },
@@ -785,6 +785,262 @@ test("server summary and paged history, receipt upload/open, recurring confirmat
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(page.locator(".fleet-row")).toHaveCount(0);
     await expect(page.locator(".fleet-summary")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await api.db.close();
+  }
+});
+
+test("vehicle documents: expiry priorities, date edits, private upload/replace/remove and mobile density", async ({
+  page,
+}) => {
+  test.setTimeout(90000);
+  const { businessAPI } = await import("./business-browser-fixture");
+  const { admin } = await import("./business-fixture");
+  const api = await businessAPI(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const date = (days: number) => {
+    const d = new Date(today() + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  try {
+    for (const type of ["ruhsat", "muayene", "sigorta", "kasko"]) {
+      await api.db.query(
+        "insert into vehicle_documents(user_id,vehicle_id,type,start_date,end_date,notes)values($1,$2,$3,$4,$5,$6)",
+        [
+          admin,
+          api.vehicles[1].id,
+          type,
+          type === "ruhsat" ? null : date(-50),
+          type === "ruhsat" ? null : date(90),
+          type === "ruhsat" ? "Ruhsat mevcut" : null,
+        ],
+      );
+    }
+    for (const [index, type, days] of [
+      [2, "muayene", 30],
+      [3, "muayene", -3],
+      [3, "sigorta", 5],
+      [4, "sigorta", -2],
+      [4, "kasko", 7],
+      [5, "kasko", -1],
+      [6, "sigorta", 15],
+    ] as const)
+      await api.db.query(
+        "insert into vehicle_documents(user_id,vehicle_id,type,end_date)values($1,$2,$3,$4)",
+        [admin, api.vehicles[index].id, type, date(days)],
+      );
+    await api.db.query(
+      "update vehicles set plate=$1,brand=$2,model=$3 where id=$4",
+      [
+        "34 UZUN 123456789012",
+        "Uzun marka ".repeat(5).trim(),
+        "Uzun model ".repeat(5).trim(),
+        api.vehicles[0].id,
+      ],
+    );
+    await page.goto("/");
+    await page.getByLabel("E-posta").fill("admin@example.test");
+    await page.getByLabel("Şifre").fill("test-password");
+    await page.getByRole("button", { name: "Giriş Yap", exact: true }).click();
+    await expect(page.locator("h1")).toHaveText("Bu Ay");
+    await nav(page, "Araçlar");
+    await expect(page.locator(".fleet-row")).toHaveCount(7);
+    await expect(
+      page.getByRole("button", { name: "Belge Uyarısı: 5", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".fleet-row").filter({ hasText: "34 QA 004" }),
+    ).toContainText("Muayene süresi doldu");
+    await expect(
+      page.locator(".fleet-row").filter({ hasText: "34 QA 005" }),
+    ).toContainText("Sigorta süresi doldu");
+    await expect(
+      page.locator(".fleet-row").filter({ hasText: "34 QA 006" }),
+    ).toContainText("Kasko süresi doldu");
+    await page
+      .getByRole("button", { name: "Belge Uyarısı: 5", exact: true })
+      .click();
+    await expect(page.locator(".fleet-row")).toHaveCount(5);
+    await page
+      .getByRole("button", { name: "Belge Uyarısı: 5", exact: true })
+      .click();
+    await page.locator(".vehicle-upcoming > summary").click();
+    await expect(page.locator(".document-upcoming-row")).toHaveCount(7);
+    await expect(page.locator(".document-upcoming-row").first()).toContainText(
+      "34 QA 004",
+    );
+    await page.locator(".fleet-row").filter({ hasText: "34 QA 002" }).click();
+    await expect(
+      page.locator(".vehicle-document-row .document-state.normal"),
+    ).toHaveCount(4);
+    await nav(page, "Araçlar");
+    await page.locator(".fleet-row").filter({ hasText: "34 UZUN" }).click();
+    await expect(
+      page.locator(".vehicle-document-row .document-state.neutral"),
+    ).toHaveCount(4);
+    await expect(page.locator(".detail-numbers")).toContainText("₺1.500,00");
+    await page
+      .getByRole("button", { name: "Muayene düzenle", exact: true })
+      .click();
+    await page.getByLabel("Başlangıç Tarihi", { exact: true }).fill(date(10));
+    await page
+      .getByLabel("Bitiş / Geçerlilik Tarihi", { exact: true })
+      .fill(date(5));
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+      "önce olamaz",
+    );
+    await page.getByLabel("Başlangıç Tarihi", { exact: true }).fill(date(-100));
+    await page
+      .getByLabel("Bitiş / Geçerlilik Tarihi", { exact: true })
+      .fill(date(10));
+    await page.getByLabel("Belge / Fotoğraf (isteğe bağlı)").setInputFiles({
+      name: "muayene.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n% local test\n%%EOF"),
+    });
+    let release!: () => void;
+    api.hold(new Promise<void>((r) => (release = r)));
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Kaydediliyor…", exact: true }),
+    ).toBeDisabled();
+    release();
+    api.hold(null);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator('[data-document-type="muayene"]')).toContainText(
+      "10 gün kaldı",
+    );
+    const saved = (
+      await api.db.query<{ id: string; file_path: string }>(
+        "select id,file_path from vehicle_documents where vehicle_id=$1",
+        [api.vehicles[0].id],
+      )
+    ).rows;
+    expect(saved).toHaveLength(1);
+    expect(saved[0].file_path).toContain(`/${api.vehicles[0].id}/muayene/`);
+    const popup = page.waitForEvent("popup");
+    await page
+      .getByRole("button", { name: "Muayene belgesini aç", exact: true })
+      .click();
+    const opened = await popup;
+    await expect
+      .poll(() => opened.url())
+      .toContain("/object/sign/vehicle-documents/");
+    await opened.close();
+    await page
+      .getByRole("button", { name: "Muayene düzenle", exact: true })
+      .click();
+    await page.getByLabel("Belge / Fotoğraf (isteğe bağlı)").setInputFiles({
+      name: "replacement.png",
+      mimeType: "image/png",
+      buffer: await page.screenshot({
+        clip: { x: 0, y: 0, width: 1, height: 1 },
+      }),
+    });
+    await page
+      .getByLabel("Bitiş / Geçerlilik Tarihi", { exact: true })
+      .fill(today());
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator('[data-document-type="muayene"]')).toContainText(
+      "Süresi doldu",
+    );
+    let objects = (
+      await api.db.query<{ name: string }>(
+        "select name from storage.objects where bucket_id='vehicle-documents'",
+      )
+    ).rows;
+    expect(objects).toHaveLength(1);
+    expect(objects[0].name).toMatch(/\.jpg$/);
+    await page
+      .getByRole("button", { name: "Muayene düzenle", exact: true })
+      .click();
+    await page.getByLabel("Mevcut eki kaldır").check();
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Muayene belgesini aç", exact: true }),
+    ).toHaveCount(0);
+    objects = (
+      await api.db.query<{ name: string }>(
+        "select name from storage.objects where bucket_id='vehicle-documents'",
+      )
+    ).rows;
+    expect(objects).toHaveLength(0);
+    await page
+      .getByRole("button", { name: "Trafik Sigortası düzenle", exact: true })
+      .click();
+    await page.getByLabel("Başlangıç Tarihi", { exact: true }).fill(today());
+    await page
+      .getByLabel("Bitiş / Geçerlilik Tarihi", { exact: true })
+      .fill(date(60));
+    await page
+      .getByLabel("Şirket / Sağlayıcı (isteğe bağlı)")
+      .fill("Uzun şirket adı ".repeat(6));
+    await page
+      .getByLabel("Poliçe Numarası (isteğe bağlı)")
+      .fill("POL-".repeat(25));
+    const failure = async (route: import("@playwright/test").Route) =>
+      route.fulfill({
+        status: 400,
+        json: {
+          message: "Upload failed",
+          statusCode: "400",
+          error: "Storage error",
+        },
+      });
+    await page.route("**/storage/v1/object/vehicle-documents/**", failure);
+    await page.getByLabel("Belge / Fotoğraf (isteğe bağlı)").setInputFiles({
+      name: "fail.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n%%EOF"),
+    });
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+    expect(
+      (
+        await api.db.query(
+          "select id from vehicle_documents where vehicle_id=$1 and type='sigorta'",
+          [api.vehicles[0].id],
+        )
+      ).rows,
+    ).toHaveLength(0);
+    await page.unroute("**/storage/v1/object/vehicle-documents/**", failure);
+    await page.getByLabel("Belge / Fotoğraf (isteğe bağlı)").setInputFiles([]);
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    for (const width of [320, 360, 390, 430, 1440]) {
+      await page.setViewportSize({ width, height: 844 });
+      await noOverflow(page);
+      if (width === 390)
+        await page.screenshot({
+          path: "test-results/vehicle-documents-mobile.png",
+          fullPage: true,
+        });
+      await page
+        .getByRole("button", { name: "Trafik Sigortası düzenle", exact: true })
+        .click();
+      await noOverflow(page);
+      await page.getByRole("button", { name: "Kapat", exact: true }).click();
+      if (width >= 768) {
+        await page.goto("/araclar");
+        await expect(page.locator("h1")).toHaveText("Araçlar");
+      } else await nav(page, "Araçlar");
+      await noOverflow(page);
+      const heights = await page
+        .locator(".fleet-row")
+        .evaluateAll((rows) =>
+          rows.map((row) => row.getBoundingClientRect().height),
+        );
+      expect(heights.every((height) => height >= 70 && height <= 100)).toBe(
+        true,
+      );
+      await page.locator(".fleet-row").filter({ hasText: "34 UZUN" }).click();
+    }
     expect(errors).toEqual([]);
   } finally {
     await api.db.close();

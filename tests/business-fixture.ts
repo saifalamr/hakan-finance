@@ -11,6 +11,7 @@ export async function businessDB() {
     "20261003153214_finance_mvp.sql",
     "20261003184712_finance_improvements.sql",
     "20261003210828_business_finance.sql",
+    "20261004145726_vehicle_documents.sql",
   ])
     await db.exec(await readFile("supabase/migrations/" + path, "utf8"));
   await db.exec(

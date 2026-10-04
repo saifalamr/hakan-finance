@@ -37,6 +37,7 @@ type Store = {
     requestId?: string,
   ) => Promise<string>;
   businessReady: boolean;
+  documentsReady: boolean;
   revision: number;
   getSnapshot: (month: string) => Promise<Snapshot>;
   remove: (table: Table, id: string) => Promise<void>;
@@ -75,6 +76,8 @@ export function errorMessage(error: unknown): string {
     "statusCode" in e
   )
     return "Belge yüklenemedi. Dosya ve alan sınırlarını veya yönetici erişimini kontrol edin.";
+  if (e?.message?.includes("vehicle_documents_check"))
+    return "Belge tarihlerini ve dosya bağlantısını kontrol edin.";
   if (e?.code === "23503")
     return "Bağlı kayıtlar nedeniyle bu işlem yapılamıyor. Geçmiş kayıtlar korunur.";
   if (e?.code === "23505") return "Bu kayıt zaten mevcut.";
@@ -124,6 +127,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [toast, setToast] = useState(""),
     [upgradeReady, setUpgradeReady] = useState(false),
     [lastDeleted, setLastDeleted] = useState(""),
+    [documentsReady, setDocumentsReady] = useState(false),
     [businessReady, setBusinessReady] = useState(false),
     [revision, setRevision] = useState(0);
   const demoData = useRef(data);
@@ -194,7 +198,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
             if (code !== "42P01" && code !== "PGRST205") throw error;
             return { rows: [], upgraded: false };
           });
-        const [rows, settings] = await Promise.all([
+        const documentsPromise = readAll(
+          "vehicle_documents",
+          userId,
+          controller.signal,
+        )
+          .then((rows) => ({ rows, available: true }))
+          .catch((error) => {
+            if (!["42P01", "PGRST205"].includes((error as PostgrestError).code))
+              throw error;
+            return { rows: [], available: false };
+          });
+        const [rows, settings, documents] = await Promise.all([
           Promise.all(
             tables.map(async (table) => {
               if (!business) return readAll(table, userId, controller.signal);
@@ -223,6 +238,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             }),
           ),
           settingsPromise,
+          documentsPromise,
         ]);
         if (sequence.current === run) {
           setBusinessReady(business);
@@ -234,11 +250,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
               controller.signal,
             );
           if (sequence.current !== run) return;
+          setDocumentsReady(documents.available);
           setUpgradeReady(settings.upgraded);
           setData({
             ...Object.fromEntries(tables.map((table, i) => [table, rows[i]])),
             finance_settings: settings.rows,
             recurring_expenses: recurring,
+            vehicle_documents: documents.rows,
           } as Data);
           setRevision((n) => n + 1);
           setLoaded(true);
@@ -345,6 +363,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
     snapshots.current.clear();
     setBusinessReady(true);
+    setDocumentsReady(true);
     setDemo(true);
     setUpgradeReady(true);
     setLoaded(true);
@@ -568,6 +587,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setLastDeleted("");
     snapshots.current.clear();
     setBusinessReady(false);
+    setDocumentsReady(false);
     setUpgradeReady(false);
     setDemo(false);
     setLoaded(false);
@@ -612,6 +632,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       value={{
         data: activeData,
         businessReady,
+        documentsReady,
         revision,
         getSnapshot,
         trash,

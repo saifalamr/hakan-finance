@@ -57,7 +57,7 @@ export async function businessAPI(page: Page, large = false) {
   await page
     .context()
     .route(
-      "http://127.0.0.1:54321/storage/v1/object/sign/finance-receipts/**?token=test",
+      "http://127.0.0.1:54321/storage/v1/object/sign/**?token=test",
       async (route) => {
         await route.fulfill({
           contentType: "text/html",
@@ -74,6 +74,7 @@ export async function businessAPI(page: Page, large = false) {
     "employee_periods",
     "finance_settings",
     "recurring_expenses",
+    "vehicle_documents",
   ]);
   let holdWrite: Promise<void> | null = null;
   await page.route("http://127.0.0.1:54321/**", async (route) => {
@@ -204,30 +205,30 @@ export async function businessAPI(page: Page, large = false) {
             )
           ).rows.map((r) => r.row);
         } else throw new Error("Unexpected test method");
-      } else if (path.startsWith("/storage/v1/object/sign/finance-receipts/"))
+      } else if (path.startsWith("/storage/v1/object/sign/"))
         body = { signedURL: path.replace("/storage/v1", "") + "?token=test" };
-      else if (
-        path === "/storage/v1/object/finance-receipts" &&
-        req.method() === "DELETE"
-      ) {
-        const input = req.postDataJSON();
-        for (const name of input.prefixes)
+      else if (path.startsWith("/storage/v1/object/")) {
+        const parts = path.split("/");
+        const bucket = parts[4];
+        if (!["finance-receipts", "vehicle-documents"].includes(bucket))
+          throw new Error("Unexpected bucket");
+        if (req.method() === "DELETE") {
+          body = [];
+          for (const name of req.postDataJSON().prefixes) {
+            const deleted = await db.query<{ name: string }>(
+              "delete from storage.objects where bucket_id=$1 and name=$2 returning name",
+              [bucket, name],
+            );
+            (body as unknown[]).push(...deleted.rows);
+          }
+        } else {
+          const name = decodeURIComponent(parts.slice(5).join("/"));
           await db.query(
-            "delete from storage.objects where bucket_id=$1 and name=$2",
-            ["finance-receipts", name],
+            "insert into storage.objects(bucket_id,name,metadata)values($1,$2,$3)",
+            [bucket, name, { size: req.postDataBuffer()?.length || 1000 }],
           );
-        body = input.prefixes.map((name: string) => ({ name }));
-      } else if (path.startsWith("/storage/v1/object/finance-receipts/")) {
-        const name = decodeURIComponent(path.split("/finance-receipts/")[1]);
-        await db.query(
-          "insert into storage.objects(bucket_id,name,metadata)values($1,$2,$3)",
-          [
-            "finance-receipts",
-            name,
-            { size: req.postDataBuffer()?.length || 1000 },
-          ],
-        );
-        body = { Key: "finance-receipts/" + name, Id: crypto.randomUUID() };
+          body = { Key: bucket + "/" + name, Id: crypto.randomUUID() };
+        }
       }
       calls.push({ path, method: req.method(), rows: count });
       await route.fulfill({ json: body });

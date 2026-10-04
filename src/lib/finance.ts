@@ -1,3 +1,4 @@
+import type { VehicleDocument } from "./vehicle-documents";
 export type TransactionType = "income" | "expense" | "adjustment";
 export type PayrollKind =
   "salary_payment" | "advance" | "bonus" | "bonus_due" | "deduction";
@@ -63,6 +64,7 @@ export type Data = {
   employee_periods: PayrollPeriod[];
   finance_settings?: FinanceSettings[];
   recurring_expenses?: RecurringExpense[];
+  vehicle_documents?: VehicleDocument[];
   export_context?: { end: string; balance: number | null };
 };
 export const emptyData: Data = {

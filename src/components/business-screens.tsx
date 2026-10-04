@@ -6,6 +6,12 @@ import { Plus, Pencil, Search, ChevronRight, Archive } from "lucide-react";
 import { useData, errorMessage } from "./data-provider";
 import { useSnapshot, useTransactionPage } from "./business-hooks";
 import { TransactionList } from "./screens";
+import { VehicleDocuments } from "./vehicle-documents";
+import {
+  documentWarnings,
+  documentWarningLabel,
+  documentLabels,
+} from "@/lib/vehicle-documents";
 import { ExcelExport } from "./improvements";
 import { EmptyState, MonthPicker, Summary } from "./ui";
 import { type EntityModal, type TransactionPrefill } from "./forms";
@@ -399,6 +405,7 @@ function VehicleDetail({
           </button>
         )}
       </div>
+      <VehicleDocuments vehicleId={id} />
       <p className="small muted status-explanation">
         {status.average === null
           ? "Durum hesabı için son üç ayda en az iki giderli ay gerekir."
@@ -437,7 +444,21 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState("all"),
     [sort, setSort] = useState("highest"),
-    [archived, setArchived] = useState(false);
+    [archived, setArchived] = useState(false),
+    [documentFilter, setDocumentFilter] = useState(false);
+  const { data, documentsReady } = useData();
+  const reference = today();
+  const warnings = useMemo(
+    () => documentWarnings(data.vehicle_documents || [], reference),
+    [data.vehicle_documents, reference],
+  );
+  const warningsByVehicle = useMemo(() => {
+    const map = new Map<string, (typeof warnings)[number]>();
+    for (const item of warnings)
+      if (!map.has(item.document.vehicle_id))
+        map.set(item.document.vehicle_id, item);
+    return map;
+  }, [warnings]);
   const deferred = useDeferredValue(query),
     s = useSnapshot(month);
   const active = useMemo(
@@ -455,7 +476,8 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
               .toLocaleLowerCase("tr-TR")
               .replace(/\s/g, "")
               .includes(q)) &&
-          (filter === "all" || vehicleStatus(v).status === filter),
+          (filter === "all" || vehicleStatus(v).status === filter) &&
+          (!documentFilter || warningsByVehicle.has(v.id)),
       )
       .sort((a, b) =>
         sort === "plate"
@@ -466,7 +488,15 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
               ? a.current - b.current
               : b.current - a.current,
       );
-  }, [s.value, deferred, filter, sort, archived]);
+  }, [
+    s.value,
+    deferred,
+    filter,
+    sort,
+    archived,
+    documentFilter,
+    warningsByVehicle,
+  ]);
   const fleet = useMemo(
     () => ({
       current: active.reduce((n, v) => n + v.current, 0),
@@ -481,6 +511,13 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
     }),
     [active],
   );
+  const activeIds = new Set(active.map((v) => v.id));
+  const upcoming = warnings.filter((item) =>
+    activeIds.has(item.document.vehicle_id),
+  );
+  const documentCount = new Set(
+    upcoming.map((item) => item.document.vehicle_id),
+  ).size;
   if (id)
     return (
       <>
@@ -528,6 +565,15 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
                 Dikkat Gereken: <strong>{fleet.attention}</strong>
               </span>
               <Change current={fleet.current} previous={fleet.previous} />
+              {documentsReady && (
+                <button
+                  className={`document-attention-filter ${documentFilter ? "active" : ""}`}
+                  aria-pressed={documentFilter}
+                  onClick={() => setDocumentFilter(!documentFilter)}
+                >
+                  Belge Uyarısı: <strong>{documentCount}</strong>
+                </button>
+              )}
             </div>
             <div className="fleet-overview-max">
               En Çok Gider:{" "}
@@ -575,7 +621,7 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
               </button>
             ))}
           </div>
-          {(query || filter !== "all" || archived) && (
+          {(query || filter !== "all" || archived || documentFilter) && (
             <p className="small muted filtered-count" role="status">
               {items.length} araç{archived ? " · Arşiv" : ""}
             </p>
@@ -583,11 +629,15 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
           <div className="compact-list">
             {items.map((v) => {
               const status = vehicleStatus(v);
+              const warning = documentsReady
+                ? warningsByVehicle.get(v.id)
+                : undefined;
               return (
                 <Link
                   key={v.id}
                   href={"/araclar/" + v.id}
                   className="fleet-row"
+                  title={`Gider: ${statusLabels[status.status]}${warning ? ` · ${documentWarningLabel(warning)}` : ""}`}
                 >
                   <i
                     className={`status-dot ${status.status}`}
@@ -601,8 +651,16 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
                   </div>
                   <div className="entity-finance">
                     <strong>{money(v.current)}</strong>
-                    <span className={status.status}>
-                      {statusLabels[status.status]}
+                    <span
+                      className={
+                        warning
+                          ? `fleet-document-warning ${warning.status.tone}`
+                          : status.status
+                      }
+                    >
+                      {warning
+                        ? documentWarningLabel(warning)
+                        : statusLabels[status.status]}
                     </span>
                   </div>
                   <ChevronRight size={15} />
@@ -615,6 +673,47 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
               title={active.length ? "Araç bulunamadı" : "Henüz araç yok"}
               text="Arama veya filtreyi değiştirin; ilk aracınızı ekleyin."
             />
+          )}
+          {documentsReady && (
+            <details className="vehicle-upcoming">
+              <summary>
+                Yaklaşan Tarihler <span>{upcoming.length}</span>
+              </summary>
+              {upcoming.length ? (
+                <div className="document-upcoming-list">
+                  {upcoming.map((item) => {
+                    const vehicle = active.find(
+                      (v) => v.id === item.document.vehicle_id,
+                    )!;
+                    return (
+                      <Link
+                        className="document-upcoming-row"
+                        href={`/araclar/${vehicle.id}`}
+                        key={item.document.id}
+                      >
+                        <div>
+                          <strong>{vehicle.plate}</strong>
+                          <span>
+                            {documentLabels[item.document.type]} ·{" "}
+                            {item.document.end_date
+                              ?.split("-")
+                              .reverse()
+                              .join(".")}
+                          </span>
+                        </div>
+                        <span className={`document-state ${item.status.tone}`}>
+                          {item.status.label}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="small muted">
+                  Yaklaşan veya süresi dolmuş belge yok.
+                </p>
+              )}
+            </details>
           )}
           <p className="small muted status-explanation">
             Durum, son üç aydaki giderli ayların ortalamasına göre hesaplanır.

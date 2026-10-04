@@ -55,15 +55,19 @@ export async function prepareReceipt(file: File): Promise<Blob> {
     bitmap.close();
   }
 }
-export async function uploadReceipt(blob: Blob, path: string) {
+export async function uploadReceipt(
+  blob: Blob,
+  path: string,
+  bucket = "finance-receipts",
+) {
   const { error } = await supabase!.storage
-    .from("finance-receipts")
+    .from(bucket)
     .upload(path, blob, { contentType: blob.type, upsert: false });
   if (error && !/already exists|Duplicate/i.test(error.message)) throw error;
 }
-export async function openReceipt(path: string) {
+export async function openReceipt(path: string, bucket = "finance-receipts") {
   const { data, error } = await supabase!.storage
-    .from("finance-receipts")
+    .from(bucket)
     .createSignedUrl(path, 60);
   if (error) throw error;
   // Link opened by the original user gesture's pre-opened window; avoid popup blockers.
