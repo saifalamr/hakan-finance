@@ -559,6 +559,15 @@ test("compact fleet status, filters, archive/restore and employee-linked vehicle
   data.vehicles = Array.from({ length: 7 }, (_, i) => ({
     ...data.vehicles[0],
     id: "fleet-" + i,
+    model: [
+      "Clio",
+      "TRANSIT",
+      "D-Max",
+      "Actros",
+      "Qashqai",
+      "Caddy",
+      "Bilinmeyen",
+    ][i],
     plate: "34 QA " + (i + 1),
   }));
   data.transactions = [];
@@ -586,6 +595,14 @@ test("compact fleet status, filters, archive/restore and employee-linked vehicle
   await demo(page);
   await nav(page, "Araçlar");
   await expect(page.locator(".fleet-row")).toHaveCount(7);
+  await expect(page.locator(".fleet-row .vehicle-illustration")).toHaveCount(7);
+  expect(
+    await page
+      .locator(".vehicle-illustration")
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getAttribute("data-shape")),
+      ),
+  ).toEqual(["car", "van", "pickup", "truck", "suv", "van", "car"]);
   const sizes = await page
     .locator(".fleet-row")
     .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height));
@@ -782,7 +799,7 @@ test("server summary and paged history, receipt upload/open, recurring confirmat
       }),
     );
     await page.getByRole("button", { name: "Sonraki ay", exact: true }).click();
-    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.locator('.panel.form-error[role="alert"]')).toBeVisible();
     await expect(page.locator(".fleet-row")).toHaveCount(0);
     await expect(page.locator(".fleet-summary")).toHaveCount(0);
     expect(errors).toEqual([]);

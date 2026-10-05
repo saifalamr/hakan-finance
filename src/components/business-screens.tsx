@@ -7,6 +7,7 @@ import { useData, errorMessage } from "./data-provider";
 import { useSnapshot, useTransactionPage } from "./business-hooks";
 import { TransactionList } from "./screens";
 import { VehicleDocuments } from "./vehicle-documents";
+import { VehicleIllustration } from "./vehicle-illustration";
 import {
   documentWarnings,
   documentWarningLabel,
@@ -639,10 +640,10 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
                   className="fleet-row"
                   title={`Gider: ${statusLabels[status.status]}${warning ? ` · ${documentWarningLabel(warning)}` : ""}`}
                 >
-                  <i
-                    className={`status-dot ${status.status}`}
-                    aria-hidden="true"
-                  />
+                  <div className="fleet-visual" aria-hidden="true">
+                    <VehicleIllustration model={v.model} />
+                    <i className={`status-dot ${status.status}`} />
+                  </div>
                   <div className="entity-name">
                     <strong>{v.plate}</strong>
                     <span>
