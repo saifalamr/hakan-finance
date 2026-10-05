@@ -346,9 +346,6 @@ function VehicleDetail({
   const status = vehicleStatus(v);
   return (
     <>
-      <Link className="back-link" href="/araclar">
-        ← Araçlar
-      </Link>
       <Heading title={v.plate}>
         <button
           className="button secondary"
@@ -747,9 +744,6 @@ function EmployeeDetail({
   const status = employeeStatus(e, month);
   return (
     <>
-      <Link className="back-link" href="/personel">
-        ← Personel
-      </Link>
       <Heading title={e.name}>
         <button
           className="button secondary"

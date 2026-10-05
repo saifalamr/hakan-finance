@@ -41,6 +41,7 @@ type Store = {
   revision: number;
   getSnapshot: (month: string) => Promise<Snapshot>;
   remove: (table: Table, id: string) => Promise<void>;
+  deleteVehicle: (id: string) => Promise<void>;
   startDemo: () => void;
   signOut: () => Promise<void>;
   toast: string;
@@ -78,6 +79,8 @@ export function errorMessage(error: unknown): string {
     return "Belge yüklenemedi. Dosya ve alan sınırlarını veya yönetici erişimini kontrol edin.";
   if (e?.message?.includes("vehicle_documents_check"))
     return "Belge tarihlerini ve dosya bağlantısını kontrol edin.";
+  if (e?.message?.includes("vehicle_has_history_archive_instead"))
+    return "Bu araçta işlem, belge veya düzenli gider var. Geçmişi korumak için arşivleyin.";
   if (e?.code === "23503")
     return "Bağlı kayıtlar nedeniyle bu işlem yapılamıyor. Geçmiş kayıtlar korunur.";
   if (e?.code === "23505") return "Bu kayıt zaten mevcut.";
@@ -512,6 +515,51 @@ export function DataProvider({ children }: { children: ReactNode }) {
       writing.current = false;
     }
   }
+  async function deleteVehicle(id: string) {
+    if (writing.current)
+      throw new Error("Önceki kayıt tamamlanıyor. Lütfen bekleyin.");
+    if (demo) {
+      const current = demoData.current;
+      if (
+        current.transactions.some((t) => t.vehicle_id === id) ||
+        current.vehicle_documents?.some((d) => d.vehicle_id === id) ||
+        current.recurring_expenses?.some((r) => r.vehicle_id === id)
+      )
+        throw new Error(
+          "Bu araçta işlem, belge veya düzenli gider var. Geçmişi korumak için arşivleyin.",
+        );
+      persist({
+        ...current,
+        vehicles: current.vehicles.filter((v) => v.id !== id),
+      });
+      snapshots.current.clear();
+      setRevision((n) => n + 1);
+      return;
+    }
+    writing.current = true;
+    cancelRead();
+    const owner = userId;
+    try {
+      const { error } = await supabase!.rpc("delete_unused_vehicle", {
+        p_vehicle: id,
+      });
+      if (error?.code === "PGRST202" || error?.code === "42883")
+        throw new Error(
+          "Kalıcı silme için veritabanı güncellemesi gerekli. Şimdilik arşivleyebilirsiniz.",
+        );
+      if (error) throw error;
+      if (authenticatedUser.current !== owner) return;
+      setData((previous) => ({
+        ...previous,
+        vehicles: previous.vehicles.filter((v) => v.id !== id),
+      }));
+      snapshots.current.clear();
+      setRevision((n) => n + 1);
+      setLoadError("");
+    } finally {
+      writing.current = false;
+    }
+  }
   async function remove(table: Table, id: string) {
     if (table === "transactions") {
       if (!upgradeReady)
@@ -648,6 +696,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refresh,
         save,
         remove,
+        deleteVehicle,
         startDemo,
         signOut,
         toast,

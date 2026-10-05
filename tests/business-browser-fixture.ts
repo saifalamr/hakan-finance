@@ -114,6 +114,11 @@ export async function businessAPI(page: Page, large = false) {
           sql = "select finance_balance($1::date) value";
           params = [args.p_end];
         }
+        if (name === "delete_unused_vehicle") {
+          if (holdWrite) await holdWrite;
+          sql = "select delete_unused_vehicle($1::uuid) value";
+          params = [args.p_vehicle];
+        }
         if (name === "post_recurring") {
           sql = "select post_recurring($1::uuid,$2::date) value";
           params = [args.p_id, args.p_due];
@@ -137,7 +142,7 @@ export async function businessAPI(page: Page, large = false) {
         }
         if (!sql) throw new Error("Unsupported test RPC");
         body = (await db.query<{ value: unknown }>(sql, params)).rows[0].value;
-        count = (body as { rows?: unknown[] }).rows?.length || 0;
+        count = (body as { rows?: unknown[] })?.rows?.length || 0;
       } else if (path.startsWith("/rest/v1/")) {
         const table = path.split("/").at(-1)!;
         if (!allowed.has(table)) throw new Error("Unexpected test table");

@@ -1074,3 +1074,126 @@ test("vehicle documents: expiry priorities, date edits, private upload/replace/r
     await api.db.close();
   }
 });
+
+test("navigation return links, contextual quick entry and safe vehicle deletion", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  const { businessAPI } = await import("./business-browser-fixture");
+  const api = await businessAPI(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await page.goto("/");
+    await page.getByLabel("E-posta").fill("admin@example.test");
+    await page.getByLabel("Şifre", { exact: true }).fill("local-test-password");
+    await page.getByRole("button", { name: "Giriş Yap", exact: true }).click();
+    await expect(page.locator("h1")).toHaveText("Bu Ay");
+    await nav(page, "Daha Fazla");
+    await page.getByRole("link", { name: /Raporlar/ }).click();
+    await expect(page.locator("h1")).toHaveText("Raporlar");
+    await expect(
+      page
+        .getByRole("navigation", { name: "Mobil menü" })
+        .getByRole("link", { name: "Daha Fazla", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await page.locator(".section-back").click();
+    await expect(page.locator("h1")).toHaveText("Daha Fazla");
+    await page.goto("/araclar/not-a-uuid");
+    await expect(
+      page.getByRole("heading", { name: "Sayfa bulunamadı" }),
+    ).toBeVisible();
+    await page.locator(".section-back").click();
+    await expect(page.locator("h1")).toHaveText("Araçlar");
+    await page.getByRole("button", { name: "Araç Ekle", exact: true }).click();
+    await page.getByLabel("Plaka", { exact: true }).fill("34 REMOVE");
+    await page.getByLabel("Marka", { exact: true }).fill("Renault");
+    await page.getByLabel("Model", { exact: true }).fill("Clio");
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.locator(".fleet-row").filter({ hasText: "34 REMOVE" }).click();
+    await expect(page.locator(".section-back")).toHaveText("Araçlar");
+    await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
+    await expect(page.getByLabel("Araç", { exact: true })).toHaveValue(
+      (
+        await api.db.query<{ id: string }>(
+          "select id from vehicles where plate='34 REMOVE'",
+        )
+      ).rows[0].id,
+    );
+    await page.getByRole("button", { name: "Kapat", exact: true }).click();
+    await page.getByRole("button", { name: "Düzenle", exact: true }).click();
+    await page.getByRole("button", { name: "Aracı sil", exact: true }).click();
+    await page.getByRole("button", { name: "Vazgeç", exact: true }).click();
+    expect(
+      (await api.db.query("select id from vehicles where plate='34 REMOVE'"))
+        .rows,
+    ).toHaveLength(1);
+    await page.getByRole("button", { name: "Aracı sil", exact: true }).click();
+    let release!: () => void;
+    api.hold(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    await page
+      .getByRole("button", { name: "Evet, aracı sil", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Siliniyor…", exact: true }),
+    ).toBeDisabled();
+    release();
+    api.hold(null);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator("h1")).toHaveText("Araçlar");
+    expect(
+      (await api.db.query("select id from vehicles where plate='34 REMOVE'"))
+        .rows,
+    ).toHaveLength(0);
+    expect(
+      api.calls.filter((call) => call.path.endsWith("/delete_unused_vehicle")),
+    ).toHaveLength(1);
+    await page.locator(".fleet-row").first().click();
+    await page.getByRole("button", { name: "Düzenle", exact: true }).click();
+    await page.getByRole("button", { name: "Aracı sil", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Evet, aracı sil", exact: true })
+      .click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+      "arşivleyin",
+    );
+    await page.getByRole("button", { name: "Vazgeç", exact: true }).click();
+    await page.getByRole("button", { name: "Arşivle", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Evet, arşivle", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.locator(".section-back").click();
+    await expect(page.locator(".fleet-row")).toHaveCount(6);
+    await page.getByRole("button", { name: "Arşiv", exact: true }).click();
+    await expect(page.locator(".fleet-row")).toHaveCount(1);
+    await page.goto("/personel/00000000-0000-0000-0000-000000000099");
+    await expect(
+      page.getByRole("heading", { name: "Personel bulunamadı" }),
+    ).toBeVisible();
+    await page.locator(".section-back").click();
+    await expect(page.locator("h1")).toHaveText("Personel");
+    await page.locator(".staff-row").first().click();
+    await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
+    await expect(page.getByLabel("Personel", { exact: true })).toHaveValue(
+      api.employee,
+    );
+    await page.getByRole("button", { name: "Kapat", exact: true }).click();
+    await page.locator(".section-back").click();
+    for (const width of [320, 390, 1440]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/raporlar");
+      await expect(page.locator("h1")).toHaveText("Raporlar");
+      await expect(page.locator(".section-back")).toBeVisible();
+      await noOverflow(page);
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await api.db.close();
+  }
+});

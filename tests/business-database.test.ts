@@ -234,3 +234,100 @@ test("history status boundaries and month-end recurrence dates", () => {
   assert.equal(nextRecurringDate("2024-02-29", "yearly", 29, 2), "2025-02-28");
   assert.equal(nextRecurringDate("2026-12-28", "weekly", 28, 12), "2027-01-04");
 });
+
+test("only unused owned vehicles can be permanently deleted; history and files remain protected", async () => {
+  const db = await businessDB();
+  try {
+    const create = async (plate: string) =>
+      (
+        await db.query<{ id: string }>(
+          "insert into vehicles(user_id,plate,brand,model) values($1,$2,'Renault','Clio') returning id",
+          [admin, plate],
+        )
+      ).rows[0].id;
+    const remove = async (id: string) =>
+      (
+        await db.query<{ removed: boolean }>(
+          "select delete_unused_vehicle($1) removed",
+          [id],
+        )
+      ).rows[0].removed;
+    const empty = await create("34 EMPTY");
+    await assert.rejects(
+      db.query("delete from vehicles where id=$1", [empty]),
+      /permission denied/,
+    );
+    assert.equal(await remove(empty), true);
+    assert.equal(await remove(empty), false);
+    const history = await create("34 HISTORY");
+    const fuel = (
+      await db.query<{ id: string }>(
+        "select id from categories where name='Yakıt'",
+      )
+    ).rows[0].id;
+    await db.query(
+      "insert into transactions(user_id,type,amount,category_id,vehicle_id,date,deleted_at) values($1,'expense',25000,$2,$3,current_date,now())",
+      [admin, fuel, history],
+    );
+    await assert.rejects(
+      remove(history),
+      /vehicle_has_history_archive_instead/,
+    );
+    assert.equal(
+      (
+        await db.query("select id from transactions where vehicle_id=$1", [
+          history,
+        ])
+      ).rows.length,
+      1,
+    );
+    const scheduled = await create("34 SCHEDULE");
+    await db.query(
+      "insert into recurring_expenses(user_id,name,amount,category_id,vehicle_id,frequency,next_date,anchor_day,anchor_month) values($1,'Kira',10000,$2,$3,'monthly',current_date,1,1)",
+      [admin, fuel, scheduled],
+    );
+    await assert.rejects(
+      remove(scheduled),
+      /vehicle_has_history_archive_instead/,
+    );
+    const documented = await create("34 DOC");
+    await db.query(
+      "insert into vehicle_documents(user_id,vehicle_id,type,notes) values($1,$2,'ruhsat','Mevcut')",
+      [admin, documented],
+    );
+    await assert.rejects(
+      remove(documented),
+      /vehicle_has_history_archive_instead/,
+    );
+    const uploading = await create("34 FILE");
+    const path = `${admin}/${uploading}/ruhsat/00000000-0000-0000-0000-000000000099.pdf`;
+    await db.query(
+      "insert into storage.objects(bucket_id,name,metadata) values('vehicle-documents',$1,'{\"size\":100}')",
+      [path],
+    );
+    await assert.rejects(
+      remove(uploading),
+      /vehicle_has_history_archive_instead/,
+    );
+    assert.equal(
+      (await db.query("select id from storage.objects where name=$1", [path]))
+        .rows.length,
+      1,
+    );
+    await db.query("delete from storage.objects where name=$1", [path]);
+    assert.equal(await remove(uploading), true);
+    const archived = await create("34 ARCHIVED");
+    await db.query("update vehicles set archived_at=now() where id=$1", [
+      archived,
+    ]);
+    assert.equal(await remove(archived), true);
+    await db.query("select set_config('request.jwt.claim.sub',$1,false)", [
+      outsider,
+    ]);
+    await assert.rejects(remove(history), /administrator_required/);
+    await db.exec("set role anon");
+    await assert.rejects(remove(history), /permission denied/);
+  } finally {
+    await db.close();
+  }
+});

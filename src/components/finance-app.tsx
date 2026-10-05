@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowRight,
+  ChevronLeft,
   BarChart3,
   CarFront,
   Home,
@@ -197,15 +198,32 @@ function Shell() {
   };
   const parts = pathname.split("/").filter(Boolean);
   const section = parts[0] || "";
+  const detailSection = ["araclar", "personel"].includes(section);
   const valid =
-    !section ||
-    ["islemler", "araclar", "personel", "raporlar", "daha-fazla"].includes(
-      section,
-    );
+    (!section ||
+      ["islemler", "araclar", "personel", "raporlar", "daha-fazla"].includes(
+        section,
+      )) &&
+    parts.length <= (detailSection ? 2 : 1) &&
+    (!detailSection ||
+      !parts[1] ||
+      store.demo ||
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        parts[1],
+      ));
+  const back =
+    detailSection && parts[1]
+      ? {
+          href: `/${section}`,
+          label: section === "araclar" ? "Araçlar" : "Personel",
+        }
+      : section === "raporlar"
+        ? { href: "/daha-fazla", label: "Daha Fazla" }
+        : null;
   const active = (href: string) =>
     href === "/"
       ? pathname === "/"
-      : pathname.startsWith(href) ||
+      : section === href.slice(1) ||
         (href === "/daha-fazla" && section === "raporlar");
   async function logout() {
     try {
@@ -244,6 +262,7 @@ function Shell() {
           </Link>
           <Link
             href="/daha-fazla"
+            aria-current={section === "daha-fazla" ? "page" : undefined}
             className={
               section === "daha-fazla" ? "nav-link active" : "nav-link"
             }
@@ -297,6 +316,12 @@ function Shell() {
           </div>
         )}
         <main className="main-content" id="main-content">
+          {back && (
+            <Link className="back-link section-back" href={back.href}>
+              <ChevronLeft size={16} />
+              {back.label}
+            </Link>
+          )}
           {store.loaded && store.loadError && (
             <div role="alert" className="panel">
               <p>{store.loadError}</p>
@@ -336,9 +361,7 @@ function Shell() {
                 }
               />
             </section>
-          ) : !valid ||
-            parts.length >
-              (["araclar", "personel"].includes(section) ? 2 : 1) ? (
+          ) : !valid ? (
             <EmptyState
               title="Sayfa bulunamadı"
               action={
@@ -364,7 +387,25 @@ function Shell() {
       </div>
       <button
         className="quick-add"
-        onClick={() => actions.add()}
+        onClick={() => {
+          const vehicle =
+            section === "araclar" &&
+            store.data.vehicles.find(
+              (v) => v.id === parts[1] && !v.archived_at,
+            );
+          const employee =
+            section === "personel" &&
+            store.data.employees.find(
+              (e) => e.id === parts[1] && !e.archived_at,
+            );
+          actions.add(
+            vehicle
+              ? { vehicle_id: vehicle.id }
+              : employee
+                ? { employee_id: employee.id }
+                : undefined,
+          );
+        }}
         aria-label="İşlem Ekle"
       >
         <Plus size={21} />
@@ -403,7 +444,14 @@ function Shell() {
         />
       )}
       {entityModal && (
-        <EntityForm modal={entityModal} onClose={() => setEntityModal(null)} />
+        <EntityForm
+          modal={entityModal}
+          onClose={() => setEntityModal(null)}
+          onVehicleDeleted={(id) => {
+            if (section === "araclar" && parts[1] === id)
+              router.replace("/araclar");
+          }}
+        />
       )}
       {store.toast && (
         <div className="toast" role="status">

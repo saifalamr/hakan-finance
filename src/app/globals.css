@@ -2432,3 +2432,5 @@ input[type="date"] {
   .fleet-visual { width: 32px; flex-basis: 32px; }
   .fleet-document-warning { max-width: 90px; }
 }
+
+.section-back { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; margin-bottom: 6px; }

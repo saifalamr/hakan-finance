@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, type FormEvent } from "react";
-import { ChevronDown, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, Trash2 } from "lucide-react";
 import {
   type Transaction,
   type Employee,
@@ -515,16 +515,19 @@ export type EntityModal =
 export function EntityForm({
   modal,
   onClose,
+  onVehicleDeleted,
 }: {
   modal: EntityModal;
   onClose: () => void;
+  onVehicleDeleted?: (id: string) => void;
 }) {
-  const { save, remove, notify, businessReady } = useData();
+  const { save, remove, deleteVehicle, notify, businessReady } = useData();
   const requestId = useRef(crypto.randomUUID());
   const submitting = useRef(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [confirmDelete, setConfirmDelete] = useState(false);
+    [confirmDelete, setConfirmDelete] = useState(false),
+    [confirmPermanent, setConfirmPermanent] = useState(false);
   const { type, record } = modal;
   const title =
     type === "vehicle"
@@ -580,6 +583,13 @@ export function EntityForm({
               }
             : { name: String(form.get("name")).trim(), salary, work_days };
       }
+      if (
+        type === "vehicle" &&
+        [values.plate, values.brand, values.model].some(
+          (value) => !String(value).trim(),
+        )
+      )
+        throw new Error("Plaka, marka ve model boş bırakılamaz.");
       if ("name" in values && !String(values.name).trim())
         throw new Error("İsim boş bırakılamaz.");
       await save(
@@ -597,16 +607,23 @@ export function EntityForm({
       setBusy(false);
     }
   }
-  async function deleteRecord() {
+  async function deleteRecord(permanent = false) {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
-      await remove(table, record!.id);
-      notify(`${title} ${type === "category" ? "silindi" : "arşivlendi"}.`);
+      if (permanent && type === "vehicle") await deleteVehicle(record!.id);
+      else await remove(table, record!.id);
+      notify(
+        `${title} ${type === "category" || permanent ? "silindi" : "arşivlendi"}.`,
+      );
       onClose();
+      if (permanent && type === "vehicle") onVehicleDeleted?.(record!.id);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -749,6 +766,47 @@ export function EntityForm({
         <button className="button primary full" disabled={busy}>
           {busy ? "Kaydediliyor…" : "Kaydet"}
         </button>
+        {record && type === "vehicle" && (
+          <div className="delete-zone">
+            {confirmPermanent ? (
+              <>
+                <p>
+                  Bu araç kalıcı olarak silinsin mi? İşlem veya belge varsa
+                  silinmez. Bu işlem geri alınamaz.
+                </p>
+                <button
+                  type="button"
+                  className="button danger"
+                  disabled={busy}
+                  onClick={() => void deleteRecord(true)}
+                >
+                  {busy ? "Siliniyor…" : "Evet, aracı sil"}
+                </button>
+                <button
+                  type="button"
+                  className="button ghost"
+                  disabled={busy}
+                  onClick={() => setConfirmPermanent(false)}
+                >
+                  Vazgeç
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="text-button danger-text"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmPermanent(true);
+                  setConfirmDelete(false);
+                }}
+              >
+                <Trash2 size={15} />
+                Aracı sil
+              </button>
+            )}
+          </div>
+        )}
         {record &&
           type !== "period" &&
           (type === "category" || businessReady) && (
@@ -764,13 +822,14 @@ export function EntityForm({
                     type="button"
                     className="button danger"
                     disabled={busy}
-                    onClick={deleteRecord}
+                    onClick={() => void deleteRecord()}
                   >
                     {type === "category" ? "Evet, sil" : "Evet, arşivle"}
                   </button>
                   <button
                     type="button"
                     className="button ghost"
+                    disabled={busy}
                     onClick={() => setConfirmDelete(false)}
                   >
                     Vazgeç
@@ -780,9 +839,17 @@ export function EntityForm({
                 <button
                   type="button"
                   className="text-button danger-text"
-                  onClick={() => setConfirmDelete(true)}
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmDelete(true);
+                    setConfirmPermanent(false);
+                  }}
                 >
-                  <Trash2 size={15} />
+                  {type === "category" ? (
+                    <Trash2 size={15} />
+                  ) : (
+                    <Archive size={15} />
+                  )}
                   {type === "category" ? `${title} sil` : "Arşivle"}
                 </button>
               )}
