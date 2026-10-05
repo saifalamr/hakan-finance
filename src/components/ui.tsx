@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useId,
+  useSyncExternalStore,
   cloneElement,
   type ReactElement,
   type ReactNode,
@@ -29,9 +30,21 @@ export function Modal({
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
+    dialog
+      .querySelector<HTMLInputElement>("[data-initial-focus]")
+      ?.focus({ preventScroll: true });
+    const viewport = window.visualViewport;
+    const resize = () =>
+      dialog.style.setProperty(
+        "--dialog-viewport-height",
+        `${viewport?.height ?? window.innerHeight}px`,
+      );
+    resize();
+    viewport?.addEventListener("resize", resize);
     const old = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
+      viewport?.removeEventListener("resize", resize);
       document.body.style.overflow = old;
       dialog.close();
     };
@@ -174,5 +187,29 @@ export function Field({
       )}
       {hint && <small id={`${id}-hint`}>{hint}</small>}
     </div>
+  );
+}
+
+const subscribeConnection = (callback: () => void) => {
+  window.addEventListener("online", callback);
+  window.addEventListener("offline", callback);
+  return () => {
+    window.removeEventListener("online", callback);
+    window.removeEventListener("offline", callback);
+  };
+};
+export function useConnectionOnline() {
+  return useSyncExternalStore(
+    subscribeConnection,
+    () => navigator.onLine,
+    () => true,
+  );
+}
+export function ConnectionNotice() {
+  const online = useConnectionOnline();
+  return online ? null : (
+    <p className="connection-notice" role="status">
+      İnternet bağlantısı yok. Kaydetmeden önce bağlantınızı kontrol edin.
+    </p>
   );
 }

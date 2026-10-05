@@ -243,7 +243,7 @@ export function VehicleDocuments({ vehicleId }: { vehicleId: string }) {
     }
   }
   return (
-    <section className="panel vehicle-document-panel">
+    <section id="belgeler" className="panel vehicle-document-panel">
       <div className="section-heading">
         <h2>Belgeler & Tarihler</h2>
         <FileText size={18} className="muted" />

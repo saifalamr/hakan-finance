@@ -15,7 +15,7 @@ import {
   monthLabel,
 } from "@/lib/finance";
 import { useData, errorMessage, type Table } from "./data-provider";
-import { Field, Modal } from "./ui";
+import { Field, Modal, useConnectionOnline } from "./ui";
 export type TransactionPrefill = {
   vehicle_id?: string;
   employee_id?: string;
@@ -44,6 +44,7 @@ export function TransactionForm({
     demo,
     userId,
   } = useData();
+  const online = useConnectionOnline();
   const requestId = useRef(crypto.randomUUID());
   const submitting = useRef(false);
   const receiptPath = useRef<string | null>(null);
@@ -77,9 +78,28 @@ export function TransactionForm({
     [confirmDelete, setConfirmDelete] = useState(false);
   const categories = data.categories.filter((c) => c.type === type);
   const payroll = type === "expense" && employee && kind;
+  const quickCategories = [
+    "Yakıt",
+    "Bakım",
+    "Tamir",
+    "Kira",
+    "Personel",
+    "Müşteri Ödemesi",
+    "Diğer Gelir",
+    "Diğer",
+  ]
+    .map((name) => categories.find((c) => c.name === name))
+    .filter((c): c is Category => Boolean(c))
+    .slice(0, 5);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting.current) return;
+    if (!navigator.onLine) {
+      setError(
+        "İnternet bağlantısı yok. Bilgileriniz formda duruyor; bağlantı geldiğinde kaydedin.",
+      );
+      return;
+    }
     submitting.current = true;
     setError("");
     setBusy(true);
@@ -220,284 +240,328 @@ export function TransactionForm({
         if (!busy) onClose();
       }}
     >
-      <form onSubmit={submit} className="form-body">
-        <div className="segmented">
-          <button
-            type="button"
-            className={type === "expense" ? "selected" : ""}
-            onClick={() => {
-              setType("expense");
-              setCategory("");
-            }}
-          >
-            Gider
-          </button>
-          <button
-            type="button"
-            className={type === "income" ? "selected" : ""}
-            onClick={() => {
-              setType("income");
-              setCategory("");
-              setKind("");
-            }}
-          >
-            Gelir
-          </button>
-        </div>
-        <Field label="Tutar (₺)">
-          <input
-            autoFocus
-            name="amount"
-            inputMode="decimal"
-            required
-            placeholder="0,00"
-            className="amount-input"
-            defaultValue={source ? inputMoney(source.amount) : ""}
-            maxLength={20}
-          />
-        </Field>
-        {payroll && (kind === "deduction" || kind === "bonus_due") ? (
-          <p className="form-note">
-            {kind === "bonus_due"
-              ? "Prim alacağı kalan ödemeyi artırır; henüz kasa gideri oluşturmaz."
-              : "Kesinti maaş bakiyesini azaltır; kasa gideri oluşturmaz."}
-          </p>
-        ) : (
-          <Field label="Kategori">
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              required
-            >
-              <option value="" disabled>
-                Kategori seçin
-              </option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}
-        <button
-          type="button"
-          className="details-toggle"
-          aria-expanded={advanced}
-          onClick={() => setAdvanced(!advanced)}
+      <form onSubmit={submit} className="form-body transaction-form">
+        <fieldset
+          disabled={busy}
+          className="form-fields"
+          aria-label="İşlem bilgileri"
         >
-          Diğer bilgiler{" "}
-          <span>
-            İsteğe bağlı <ChevronDown size={16} />
-          </span>
-        </button>
-        <div hidden={!advanced} className="optional-fields">
-          <Field label="Tarih">
-            <input
-              name="date"
-              type="date"
-              required
-              defaultValue={transaction?.date || prefill?.date || today()}
-            />
-          </Field>
-          <Field label="Açıklama">
-            <input
-              name="description"
-              defaultValue={source?.description}
-              placeholder="Kısa bir not"
-              maxLength={300}
-            />
-          </Field>
-          {!payroll && (
-            <Field label="Araç">
-              <select
-                name="vehicle"
-                defaultValue={source?.vehicle_id || prefill?.vehicle_id || ""}
-              >
-                <option value="">Araç seçilmedi</option>
-                {data.vehicles
-                  .filter((v) => !v.archived_at || v.id === source?.vehicle_id)
-                  .map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.plate} · {v.brand} {v.model}
-                    </option>
-                  ))}
-              </select>
-            </Field>
-          )}
-          <Field label="Personel">
-            <select
-              value={employee}
-              onChange={(e) => {
-                setEmployee(e.target.value);
-                if (!e.target.value) setKind("");
-                else if (type === "expense") {
-                  setKind("");
-                }
+          <div className="segmented">
+            <button
+              type="button"
+              className={type === "expense" ? "selected" : ""}
+              onClick={() => {
+                setType("expense");
+                setCategory("");
               }}
             >
-              <option value="">Personel seçilmedi</option>
-              {data.employees
-                .filter((e) => !e.archived_at || e.id === source?.employee_id)
-                .map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-            </select>
+              Gider
+            </button>
+            <button
+              type="button"
+              className={type === "income" ? "selected" : ""}
+              onClick={() => {
+                setType("income");
+                setCategory("");
+                setKind("");
+              }}
+            >
+              Gelir
+            </button>
+          </div>
+          <Field label="Tutar (₺)">
+            <input
+              autoFocus
+              data-initial-focus
+              name="amount"
+              inputMode="decimal"
+              required
+              placeholder="0,00"
+              className="amount-input"
+              defaultValue={source ? inputMoney(source.amount) : ""}
+              maxLength={20}
+            />
           </Field>
-          {employee && type === "expense" && (
-            <Field label="Personel işlemi">
+          {payroll && (kind === "deduction" || kind === "bonus_due") ? (
+            <p className="form-note">
+              {kind === "bonus_due"
+                ? "Prim alacağı kalan ödemeyi artırır; henüz kasa gideri oluşturmaz."
+                : "Kesinti maaş bakiyesini azaltır; kasa gideri oluşturmaz."}
+            </p>
+          ) : (
+            <div className="category-entry">
+              <Field label="Kategori">
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  required
+                >
+                  <option value="" disabled>
+                    Kategori seçin
+                  </option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div
+                className="quick-categories"
+                role="group"
+                aria-label="Hızlı kategori seçimi"
+              >
+                {quickCategories.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    aria-pressed={category === c.id}
+                    className={category === c.id ? "selected" : ""}
+                    onClick={() => setCategory(c.id)}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            className="details-toggle"
+            aria-expanded={advanced}
+            onClick={() => setAdvanced(!advanced)}
+          >
+            Diğer bilgiler{" "}
+            <span>
+              İsteğe bağlı <ChevronDown size={16} />
+            </span>
+          </button>
+          <div hidden={!advanced} className="optional-fields">
+            <Field label="Tarih">
+              <input
+                name="date"
+                type="date"
+                required
+                defaultValue={transaction?.date || prefill?.date || today()}
+              />
+            </Field>
+            <Field label="Açıklama">
+              <input
+                name="description"
+                defaultValue={source?.description}
+                placeholder="Kısa bir not"
+                maxLength={300}
+              />
+            </Field>
+            {!payroll && (
+              <Field label="Araç">
+                <select
+                  name="vehicle"
+                  defaultValue={source?.vehicle_id || prefill?.vehicle_id || ""}
+                >
+                  <option value="">Araç seçilmedi</option>
+                  {data.vehicles
+                    .filter(
+                      (v) => !v.archived_at || v.id === source?.vehicle_id,
+                    )
+                    .map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.plate} · {v.brand} {v.model}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+            <Field label="Personel">
               <select
-                value={kind}
+                value={employee}
                 onChange={(e) => {
-                  setKind(e.target.value as PayrollKind | "");
-                  if (e.target.value)
-                    setCategory(
-                      data.categories.find(
-                        (c) => c.name === "Personel" && c.type === "expense",
-                      )?.id || "",
-                    );
+                  setEmployee(e.target.value);
+                  if (!e.target.value) setKind("");
+                  else if (type === "expense") {
+                    setKind("");
+                  }
                 }}
               >
-                <option value="">Diğer gider (maaşa dahil değil)</option>
-                {Object.entries(payrollLabels)
-                  .filter(([key]) => upgradeReady || key !== "bonus_due")
-                  .map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
+                <option value="">Personel seçilmedi</option>
+                {data.employees
+                  .filter((e) => !e.archived_at || e.id === source?.employee_id)
+                  .map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
                     </option>
                   ))}
               </select>
             </Field>
-          )}
-          {kind === "bonus" && type === "expense" && (
-            <p className="form-note">
-              Ödenen prim hem hak edişe hem yapılan ödemeye eklenir. Prim
-              alacağı ödendiğinde bu kaydı Ödenen prim olarak değiştirin; yeni
-              kayıt eklemeyin.
+            {employee && type === "expense" && (
+              <Field label="Personel işlemi">
+                <select
+                  value={kind}
+                  onChange={(e) => {
+                    setKind(e.target.value as PayrollKind | "");
+                    if (e.target.value)
+                      setCategory(
+                        data.categories.find(
+                          (c) => c.name === "Personel" && c.type === "expense",
+                        )?.id || "",
+                      );
+                  }}
+                >
+                  <option value="">Diğer gider (maaşa dahil değil)</option>
+                  {Object.entries(payrollLabels)
+                    .filter(([key]) => upgradeReady || key !== "bonus_due")
+                    .map(([key, label]) => (
+                      <option key={key} value={key}>
+                        {label}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+            {kind === "bonus" && type === "expense" && (
+              <p className="form-note">
+                Ödenen prim hem hak edişe hem yapılan ödemeye eklenir. Prim
+                alacağı ödendiğinde bu kaydı Ödenen prim olarak değiştirin; yeni
+                kayıt eklemeyin.
+              </p>
+            )}
+          </div>
+          {type === "expense" &&
+            businessReady &&
+            advanced &&
+            !["deduction", "bonus_due"].includes(kind) && (
+              <div className="receipt-field">
+                <Field label="Fiş / Fatura (isteğe bağlı)">
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    disabled={busy}
+                    onChange={(e) => {
+                      setReceipt(e.target.files?.[0] || null);
+                      receiptPath.current = null;
+                      setRemoveReceipt(false);
+                      setReceiptError("");
+                    }}
+                  />
+                </Field>
+                <small className="muted">
+                  JPEG, PNG, WebP veya PDF · En fazla 2 MB · Görseller
+                  sıkıştırılır
+                </small>
+                {transaction?.receipt_path && (
+                  <div className="receipt-actions">
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={async () => {
+                        const windowRef = window.open("about:blank", "_blank");
+                        if (windowRef) windowRef.opener = null;
+                        try {
+                          const { openReceipt } =
+                            await import("@/lib/receipts");
+                          const url = await openReceipt(
+                            transaction.receipt_path!,
+                          );
+                          if (windowRef) windowRef.location.href = url;
+                          else
+                            setReceiptError(
+                              "Belgeyi açmak için açılır pencerelere izin verin.",
+                            );
+                        } catch (e) {
+                          windowRef?.close();
+                          setReceiptError(errorMessage(e));
+                        }
+                      }}
+                    >
+                      Belgeyi aç
+                    </button>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={removeReceipt}
+                        onChange={(e) => setRemoveReceipt(e.target.checked)}
+                      />{" "}
+                      Belgeyi kaldır
+                    </label>
+                  </div>
+                )}
+                {receiptError && (
+                  <p role="alert" className="form-error">
+                    {receiptError}
+                  </p>
+                )}
+              </div>
+            )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
             </p>
           )}
-        </div>
-        {type === "expense" &&
-          businessReady &&
-          advanced &&
-          !["deduction", "bonus_due"].includes(kind) && (
-            <div className="receipt-field">
-              <Field label="Fiş / Fatura (isteğe bağlı)">
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,application/pdf"
-                  disabled={busy}
-                  onChange={(e) => {
-                    setReceipt(e.target.files?.[0] || null);
-                    receiptPath.current = null;
-                    setRemoveReceipt(false);
-                    setReceiptError("");
-                  }}
-                />
-              </Field>
-              <small className="muted">
-                JPEG, PNG, WebP veya PDF · En fazla 2 MB · Görseller
-                sıkıştırılır
-              </small>
-              {transaction?.receipt_path && (
-                <div className="receipt-actions">
+          {!online && (
+            <p className="connection-notice" role="status">
+              İnternet bağlantısı yok. Bilgileriniz formda korunur.
+            </p>
+          )}
+          <div className="transaction-save">
+            <button
+              className="button primary full"
+              type="submit"
+              disabled={busy || !online}
+            >
+              {busy
+                ? "Kaydediliyor…"
+                : !online
+                  ? "Bağlantı bekleniyor"
+                  : "Kaydet"}
+            </button>
+          </div>
+          {transaction && (
+            <button
+              type="button"
+              className="button secondary full"
+              disabled={busy}
+              onClick={() => onDuplicate(transaction)}
+            >
+              Tekrarla
+            </button>
+          )}
+          {transaction && (
+            <div className="delete-zone">
+              {confirmDelete ? (
+                <>
+                  <p>
+                    İşlem silinenlere taşınsın mı? Daha sonra geri
+                    yükleyebilirsiniz.
+                  </p>
                   <button
                     type="button"
-                    className="button secondary"
-                    onClick={async () => {
-                      const windowRef = window.open("about:blank", "_blank");
-                      if (windowRef) windowRef.opener = null;
-                      try {
-                        const { openReceipt } = await import("@/lib/receipts");
-                        const url = await openReceipt(
-                          transaction.receipt_path!,
-                        );
-                        if (windowRef) windowRef.location.href = url;
-                        else
-                          setReceiptError(
-                            "Belgeyi açmak için açılır pencerelere izin verin.",
-                          );
-                      } catch (e) {
-                        windowRef?.close();
-                        setReceiptError(errorMessage(e));
-                      }
-                    }}
+                    className="button danger"
+                    disabled={busy}
+                    onClick={deleteRecord}
                   >
-                    Belgeyi aç
+                    Evet, sil
                   </button>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={removeReceipt}
-                      onChange={(e) => setRemoveReceipt(e.target.checked)}
-                    />{" "}
-                    Belgeyi kaldır
-                  </label>
-                </div>
-              )}
-              {receiptError && (
-                <p role="alert" className="form-error">
-                  {receiptError}
-                </p>
+                  <button
+                    type="button"
+                    className="button ghost"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Vazgeç
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="text-button danger-text"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2 size={15} />
+                  İşlemi sil
+                </button>
               )}
             </div>
           )}
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <button className="button primary full" type="submit" disabled={busy}>
-          {busy ? "Kaydediliyor…" : "Kaydet"}
-        </button>
-        {transaction && (
-          <button
-            type="button"
-            className="button secondary full"
-            disabled={busy}
-            onClick={() => onDuplicate(transaction)}
-          >
-            Tekrarla
-          </button>
-        )}
-        {transaction && (
-          <div className="delete-zone">
-            {confirmDelete ? (
-              <>
-                <p>
-                  İşlem silinenlere taşınsın mı? Daha sonra geri
-                  yükleyebilirsiniz.
-                </p>
-                <button
-                  type="button"
-                  className="button danger"
-                  disabled={busy}
-                  onClick={deleteRecord}
-                >
-                  Evet, sil
-                </button>
-                <button
-                  type="button"
-                  className="button ghost"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  Vazgeç
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="text-button danger-text"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2 size={15} />
-                İşlemi sil
-              </button>
-            )}
-          </div>
-        )}
+        </fieldset>
       </form>
     </Modal>
   );

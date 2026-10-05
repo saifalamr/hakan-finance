@@ -2434,3 +2434,40 @@ input[type="date"] {
 }
 
 .section-back { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; margin-bottom: 6px; }
+
+/* Daily-use polish: compact hierarchy and meaningful financial accents. */
+.page-heading { margin-bottom: 18px; gap: 12px; }
+.page-heading h1 { font-size: 26px; line-height: 1.25; letter-spacing: -.7px; }
+.main-content { padding-top: 26px; }
+.button { min-height: 44px; }
+.form-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: contents; }
+.category-entry { display: grid; gap: 8px; }
+.quick-categories { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick-categories button { min-height: 44px; padding: 8px 12px; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+.quick-categories button.selected { border-color: var(--primary); color: var(--primary); background: #eef5f2; }
+.transaction-form { gap: 16px; }
+.transaction-save { position: sticky; bottom: 0; z-index: 2; padding: 8px 0; background: white; }
+.form-fields:disabled { opacity: .85; }
+.modal { max-height: calc(var(--dialog-viewport-height, 100dvh) - 20px); overscroll-behavior: contain; }
+.fleet-expense-status { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.fleet-document-warning { display: block; font-size: 10px; }
+.staff-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
+.staff-controls select { min-width: 0; max-width: 48%; min-height: 44px; border: 1px solid var(--line); border-radius: 6px; background: white; padding: 6px 8px; font-size: 12px; color: var(--ink); }
+.pending-filter { display: flex; align-items: center; gap: 7px; min-height: 44px; font-size: 12px; color: var(--ink); }
+.pending-filter input { accent-color: var(--primary); width: 16px; height: 16px; }
+.staff-figures .staff-remaining strong { font-size: 14px; color: var(--ink); }
+.staff-figures .staff-remaining span { color: var(--ink); font-weight: 600; }
+#belgeler { scroll-margin-top: 80px; }
+.connection-notice { padding: 10px 12px; background: #fbf3e6; color: #765929; border-left: 3px solid #bd934a; border-radius: 5px; font-size: 12px; margin-bottom: 16px; }
+@media (max-width: 600px) {
+  .page-heading h1 { font-size: 23px; }
+  .topbar { min-height: 58px; }
+  .main-content { padding-top: 20px; }
+  .form-body { padding: 16px; gap: 16px; }
+  .modal-header h2 { font-size: 16px; }
+  .fleet-expense-status { max-width: 120px; font-size: 10px; }
+  .staff-row { padding: 10px 12px; min-height: 88px; }
+  .staff-row-top { margin-bottom: 8px; }
+  .staff-controls select { font-size: 16px; }
+}
+@media (max-width: 360px) { .fleet-expense-status { max-width: 100px; } .staff-figures .staff-remaining strong { font-size: 13px; } }

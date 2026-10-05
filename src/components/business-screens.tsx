@@ -650,16 +650,21 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
                   <div className="entity-finance">
                     <strong>{money(v.current)}</strong>
                     <span
-                      className={
-                        warning
-                          ? `fleet-document-warning ${warning.status.tone}`
-                          : status.status
-                      }
+                      className={`fleet-expense-status ${status.status}`}
+                      title={`Gider: ${statusLabels[status.status]}`}
                     >
-                      {warning
-                        ? documentWarningLabel(warning)
+                      Gider:{" "}
+                      {status.status === "neutral"
+                        ? "Veri yok"
                         : statusLabels[status.status]}
                     </span>
+                    {warning && (
+                      <span
+                        className={`fleet-document-warning ${warning.status.tone}`}
+                      >
+                        {documentWarningLabel(warning)}
+                      </span>
+                    )}
                   </div>
                   <ChevronRight size={15} />
                 </Link>
@@ -686,7 +691,7 @@ export function Vehicles({ actions, id }: { actions: Actions; id?: string }) {
                     return (
                       <Link
                         className="document-upcoming-row"
-                        href={`/araclar/${vehicle.id}`}
+                        href={`/araclar/${vehicle.id}#belgeler`}
                         key={item.document.id}
                       >
                         <div>
@@ -869,7 +874,9 @@ function EmployeeDetail({
 export function Employees({ actions, id }: { actions: Actions; id?: string }) {
   const [month, setMonth] = useState(currentMonth()),
     [query, setQuery] = useState(""),
-    [archived, setArchived] = useState(false);
+    [archived, setArchived] = useState(false),
+    [pendingOnly, setPendingOnly] = useState(false),
+    [sort, setSort] = useState("name");
   const s = useSnapshot(month),
     q = useDeferredValue(query).toLocaleLowerCase("tr-TR");
   const items = useMemo(
@@ -878,10 +885,19 @@ export function Employees({ actions, id }: { actions: Actions; id?: string }) {
         .filter(
           (e) =>
             !!e.archived_at === archived &&
-            e.name.toLocaleLowerCase("tr-TR").includes(q),
+            e.name.toLocaleLowerCase("tr-TR").includes(q) &&
+            (!pendingOnly || (e.period && e.remaining > 0)),
         )
-        .sort((a, b) => a.name.localeCompare(b.name, "tr")),
-    [s.value, archived, q],
+        .sort(
+          (a, b) =>
+            (sort === "pending"
+              ? (b.period ? Math.max(0, b.remaining) : 0) -
+                (a.period ? Math.max(0, a.remaining) : 0)
+              : sort === "salary"
+                ? (b.period?.salary ?? 0) - (a.period?.salary ?? 0)
+                : 0) || a.name.localeCompare(b.name, "tr"),
+        ),
+    [s.value, archived, q, pendingOnly, sort],
   );
   if (id)
     return (
@@ -910,6 +926,25 @@ export function Employees({ actions, id }: { actions: Actions; id?: string }) {
           onChange={(e) => setQuery(e.target.value)}
         />
       </label>
+      <div className="staff-controls">
+        <label className="pending-filter">
+          <input
+            type="checkbox"
+            checked={pendingOnly}
+            onChange={(e) => setPendingOnly(e.target.checked)}
+          />
+          Ödeme bekleyenler
+        </label>
+        <select
+          aria-label="Personel sıralaması"
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+        >
+          <option value="name">Ad soyad</option>
+          <option value="pending">En yüksek kalan</option>
+          <option value="salary">En yüksek maaş</option>
+        </select>
+      </div>
       <div className="list-caption">
         <span>
           {items.length} personel{archived ? " · Arşiv" : ""}
@@ -942,7 +977,12 @@ export function Employees({ actions, id }: { actions: Actions; id?: string }) {
                       ["Ödenen", e.paid],
                       ["Kalan", e.period ? e.remaining : null],
                     ].map(([label, value]) => (
-                      <div key={String(label)}>
+                      <div
+                        key={String(label)}
+                        className={
+                          label === "Kalan" ? "staff-remaining" : undefined
+                        }
+                      >
                         <span>{label}</span>
                         <strong>
                           {typeof value === "number" ? money(value) : "—"}

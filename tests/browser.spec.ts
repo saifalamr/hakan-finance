@@ -1262,3 +1262,80 @@ test("navigation return links, contextual quick entry and safe vehicle deletion"
     await api.db.close();
   }
 });
+
+test("daily mobile entry shortcuts, offline recovery, staff priorities and separate vehicle warnings", async ({
+  page,
+  context,
+}) => {
+  const { businessAPI } = await import("./business-browser-fixture");
+  const api = await businessAPI(page);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  try {
+    await page.goto("/");
+    await page.getByLabel("E-posta").fill("admin@example.test");
+    await page.getByLabel("Şifre", { exact: true }).fill("local-test-password");
+    await page.getByRole("button", { name: "Giriş Yap", exact: true }).click();
+    await expect(page.locator("h1")).toHaveText("Bu Ay");
+    await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
+    await expect(page.getByLabel("Tutar (₺)")).toBeFocused();
+    await page.getByLabel("Tutar (₺)").fill("245,75");
+    await page
+      .getByRole("group", { name: "Hızlı kategori seçimi" })
+      .getByRole("button", { name: "Yakıt", exact: true })
+      .click();
+    await expect(page.getByLabel("Kategori", { exact: true })).not.toHaveValue(
+      "",
+    );
+    await expect(
+      page.getByRole("button", { name: /Diğer bilgiler/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+    await page.screenshot({ path: "/tmp/hakan-polish-entry.png" });
+    await context.setOffline(true);
+    await expect(
+      page.getByRole("button", { name: "Bağlantı bekleniyor", exact: true }),
+    ).toBeDisabled();
+    await expect(page.getByLabel("Tutar (₺)")).toHaveValue("245,75");
+    await context.setOffline(false);
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(
+      (
+        await api.db.query<{ amount: number }>(
+          "select amount from transactions where amount=24575",
+        )
+      ).rows,
+    ).toHaveLength(1);
+    await nav(page, "Araçlar");
+    await expect(page.locator(".fleet-expense-status").first()).toContainText(
+      "Gider:",
+    );
+    await nav(page, "Personel");
+    await page
+      .getByRole("button", { name: "Personel Ekle", exact: true })
+      .click();
+    await page.getByLabel("Ad Soyad", { exact: true }).fill("AAA Settled");
+    await page.getByLabel("Aylık Maaş (₺)", { exact: true }).fill("0");
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(".staff-row").first()).toContainText(
+      "AAA Settled",
+    );
+    await page.getByLabel("Personel sıralaması").selectOption("pending");
+    await expect(page.locator(".staff-row").first()).toContainText(
+      "Yerel Test Personel",
+    );
+    await page.getByLabel("Ödeme bekleyenler", { exact: true }).check();
+    await expect(page.locator(".staff-row")).toHaveCount(1);
+    for (const width of [320, 390, 1440]) {
+      await page.setViewportSize({ width, height: 844 });
+      await noOverflow(page);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: "/tmp/hakan-polish-staff.png" });
+    expect(errors).toEqual([]);
+  } finally {
+    await context.setOffline(false);
+    await api.db.close();
+  }
+});

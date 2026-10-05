@@ -33,7 +33,7 @@ import {
 } from "./forms";
 import { type Transaction } from "@/lib/finance";
 import { demoAllowed, isConfigured, supabase } from "@/lib/supabase";
-import { EmptyState } from "./ui";
+import { EmptyState, ConnectionNotice } from "./ui";
 const nav = [
   { href: "/", label: "Ana Sayfa", icon: Home },
   { href: "/islemler", label: "İşlemler", icon: Wallet },
@@ -316,6 +316,7 @@ function Shell() {
           </div>
         )}
         <main className="main-content" id="main-content">
+          <ConnectionNotice />
           {back && (
             <Link className="back-link section-back" href={back.href}>
               <ChevronLeft size={16} />
