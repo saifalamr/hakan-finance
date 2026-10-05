@@ -161,3 +161,5 @@ Vehicle/personnel detail pages share a persistent parent return link, including 
 ### Personel ve araç kalıcı silme
 
 `20261005173926_complete_safe_entity_deletion.sql` araç düzeltmesini tekrar güvenle kurar ve kullanılmamış personel silmeyi ekler. Personelin yalnızca mevcut aydaki, kayıt bilgileriyle eşleşen ilk maaş planı birlikte kaldırılabilir. İşlem (çöp kutusu dahil), düzenli gider veya geçmiş/farklı maaş planı varsa arşivleyin. Direkt tablo DELETE yetkisi verilmez. Hata mesajları şema güncellemesini ve hata kodunu açıkça gösterir.
+
+Silme fonksiyonları eski kurulumda bulunmayan opsiyonel belge/düzenli gider tablolarını zorunlu tutmaz. Bu tablolar varsa bağlı kayıtlar her zaman kontrol edilir. Arşivleme ve sunucu toplama özellikleri için `20261003210828_business_finance.sql` ayrıca gereklidir.

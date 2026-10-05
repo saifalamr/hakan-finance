@@ -427,3 +427,61 @@ test("unused employees delete with initial plan; paid, recurring and historical 
     await db.close();
   }
 });
+
+test("safe deletion works on older installed schemas with no recurring or document tables", async () => {
+  const db = await businessDB({ legacy: true });
+  try {
+    assert.equal(
+      (
+        await db.query<{ t: unknown }>(
+          "select to_regclass('public.recurring_expenses') t",
+        )
+      ).rows[0].t,
+      null,
+    );
+    const v = (
+      await db.query<{ id: string }>(
+        "insert into vehicles(user_id,plate,brand,model) values($1,'QA LEGACY','Ford','Transit') returning id",
+        [admin],
+      )
+    ).rows[0].id;
+    const e = (
+      await db.query<{ id: string }>(
+        "insert into employees(user_id,name,salary,work_days) values($1,'QA LEGACY',0,0) returning id",
+        [admin],
+      )
+    ).rows[0].id;
+    assert.equal(
+      (
+        await db.query<{ removed: boolean }>(
+          "select delete_unused_vehicle($1) removed",
+          [v],
+        )
+      ).rows[0].removed,
+      true,
+    );
+    assert.equal(
+      (
+        await db.query<{ removed: boolean }>(
+          "select delete_unused_employee($1) removed",
+          [e],
+        )
+      ).rows[0].removed,
+      true,
+    );
+    assert.equal(
+      (await db.query("select id from vehicles where id=$1", [v])).rows.length,
+      0,
+    );
+    assert.equal(
+      (await db.query("select id from employees where id=$1", [e])).rows.length,
+      0,
+    );
+    await assert.rejects(
+      db.query("delete from employees"),
+      /permission denied/,
+    );
+  } finally {
+    await db.close();
+  }
+});
