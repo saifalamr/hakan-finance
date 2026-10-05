@@ -42,6 +42,7 @@ type Store = {
   getSnapshot: (month: string) => Promise<Snapshot>;
   remove: (table: Table, id: string) => Promise<void>;
   deleteVehicle: (id: string) => Promise<void>;
+  deleteEmployee: (id: string) => Promise<void>;
   startDemo: () => void;
   signOut: () => Promise<void>;
   toast: string;
@@ -81,6 +82,8 @@ export function errorMessage(error: unknown): string {
     return "Belge tarihlerini ve dosya bağlantısını kontrol edin.";
   if (e?.message?.includes("vehicle_has_history_archive_instead"))
     return "Bu araçta işlem, belge veya düzenli gider var. Geçmişi korumak için arşivleyin.";
+  if (e?.message?.includes("employee_has_history_archive_instead"))
+    return "Bu personelde işlem, geçmiş maaş planı veya düzenli gider var. Geçmişi korumak için arşivleyin.";
   if (e?.code === "23503")
     return "Bağlı kayıtlar nedeniyle bu işlem yapılamıyor. Geçmiş kayıtlar korunur.";
   if (e?.code === "23505") return "Bu kayıt zaten mevcut.";
@@ -92,7 +95,10 @@ export function errorMessage(error: unknown): string {
     return "Kayıt bilgileri geçersiz. Tutarı, kategoriyi ve bağlantıları kontrol edin.";
   return error instanceof Error && !("code" in error)
     ? error.message
-    : "İşlem tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin.";
+    : "İşlem tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin." +
+        (/^(?:[0-9A-Z]{5}|PGRST[0-9]{3})$/.test(e?.code ?? "")
+          ? ` Hata kodu: ${e.code}`
+          : "");
 }
 async function readAll(table: Table, userId: string, signal: AbortSignal) {
   const rows: Record<string, unknown>[] = [];
@@ -515,22 +521,43 @@ export function DataProvider({ children }: { children: ReactNode }) {
       writing.current = false;
     }
   }
-  async function deleteVehicle(id: string) {
+  async function deleteEntity(table: "vehicles" | "employees", id: string) {
     if (writing.current)
       throw new Error("Önceki kayıt tamamlanıyor. Lütfen bekleyin.");
     if (demo) {
       const current = demoData.current;
       if (
-        current.transactions.some((t) => t.vehicle_id === id) ||
-        current.vehicle_documents?.some((d) => d.vehicle_id === id) ||
-        current.recurring_expenses?.some((r) => r.vehicle_id === id)
+        current.transactions.some(
+          (t) => (table === "vehicles" ? t.vehicle_id : t.employee_id) === id,
+        ) ||
+        (table === "vehicles" &&
+          current.vehicle_documents?.some((d) => d.vehicle_id === id)) ||
+        current.recurring_expenses?.some(
+          (r) => (table === "vehicles" ? r.vehicle_id : r.employee_id) === id,
+        ) ||
+        (table === "employees" &&
+          current.employee_periods.some(
+            (p) =>
+              p.employee_id === id &&
+              (p.month.slice(0, 7) !== currentMonth() ||
+                p.salary !==
+                  current.employees.find((e) => e.id === id)?.salary ||
+                p.work_days !==
+                  current.employees.find((e) => e.id === id)?.work_days),
+          ))
       )
         throw new Error(
-          "Bu araçta işlem, belge veya düzenli gider var. Geçmişi korumak için arşivleyin.",
+          table === "vehicles"
+            ? "Bu araçta işlem, belge veya düzenli gider var. Geçmişi korumak için arşivleyin."
+            : "Bu personelde geçmiş kayıt var. Geçmişi korumak için arşivleyin.",
         );
       persist({
         ...current,
-        vehicles: current.vehicles.filter((v) => v.id !== id),
+        [table]: current[table].filter((v) => v.id !== id),
+        employee_periods:
+          table === "employees"
+            ? current.employee_periods.filter((p) => p.employee_id !== id)
+            : current.employee_periods,
       });
       snapshots.current.clear();
       setRevision((n) => n + 1);
@@ -540,18 +567,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
     cancelRead();
     const owner = userId;
     try {
-      const { error } = await supabase!.rpc("delete_unused_vehicle", {
-        p_vehicle: id,
-      });
-      if (error?.code === "PGRST202" || error?.code === "42883")
+      const { error } = await supabase!.rpc(
+        table === "vehicles"
+          ? "delete_unused_vehicle"
+          : "delete_unused_employee",
+        table === "vehicles" ? { p_vehicle: id } : { p_employee: id },
+      );
+      if (error && ["42702", "PGRST202", "42883", "42P01"].includes(error.code))
         throw new Error(
-          "Kalıcı silme için veritabanı güncellemesi gerekli. Şimdilik arşivleyebilirsiniz.",
+          "Silme için veritabanı güncellemesi gerekli. 20261005173926_complete_safe_entity_deletion.sql dosyasını çalıştırın. Hata kodu: " +
+            error.code,
         );
       if (error) throw error;
       if (authenticatedUser.current !== owner) return;
       setData((previous) => ({
         ...previous,
-        vehicles: previous.vehicles.filter((v) => v.id !== id),
+        [table]: previous[table].filter((v) => v.id !== id),
+        employee_periods:
+          table === "employees"
+            ? previous.employee_periods.filter((p) => p.employee_id !== id)
+            : previous.employee_periods,
       }));
       snapshots.current.clear();
       setRevision((n) => n + 1);
@@ -560,6 +595,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
       writing.current = false;
     }
   }
+  const deleteVehicle = (id: string) => deleteEntity("vehicles", id);
+  const deleteEmployee = (id: string) => deleteEntity("employees", id);
   async function remove(table: Table, id: string) {
     if (table === "transactions") {
       if (!upgradeReady)
@@ -697,6 +734,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         save,
         remove,
         deleteVehicle,
+        deleteEmployee,
         startDemo,
         signOut,
         toast,

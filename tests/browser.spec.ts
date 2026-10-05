@@ -1130,6 +1130,27 @@ test("navigation return links, contextual quick entry and safe vehicle deletion"
         .rows,
     ).toHaveLength(1);
     await page.getByRole("button", { name: "Aracı sil", exact: true }).click();
+    const conflict = async (route: import("@playwright/test").Route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "42702",
+          message: 'column reference "owner_id" is ambiguous',
+        }),
+      });
+    await page.route("**/rpc/delete_unused_vehicle", conflict);
+    await page
+      .getByRole("button", { name: "Evet, aracı sil", exact: true })
+      .click();
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+      "20261005173926_complete_safe_entity_deletion.sql",
+    );
+    expect(
+      (await api.db.query("select id from vehicles where plate='34 REMOVE'"))
+        .rows,
+    ).toHaveLength(1);
+    await page.unroute("**/rpc/delete_unused_vehicle", conflict);
     let release!: () => void;
     api.hold(
       new Promise<void>((resolve) => {
@@ -1178,7 +1199,51 @@ test("navigation return links, contextual quick entry and safe vehicle deletion"
     ).toBeVisible();
     await page.locator(".section-back").click();
     await expect(page.locator("h1")).toHaveText("Personel");
+    await page
+      .getByRole("button", { name: "Personel Ekle", exact: true })
+      .click();
+    await page
+      .getByLabel("Ad Soyad", { exact: true })
+      .fill("QA DELETE EMPLOYEE");
+    await page.getByLabel("Aylık Maaş (₺)", { exact: true }).fill("32000");
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page
+      .locator(".staff-row")
+      .filter({ hasText: "QA DELETE EMPLOYEE" })
+      .click();
+    await page.getByRole("button", { name: "Düzenle", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Personeli sil", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Vazgeç", exact: true }).click();
+    expect(
+      (
+        await api.db.query(
+          "select id from employees where name='QA DELETE EMPLOYEE'",
+        )
+      ).rows,
+    ).toHaveLength(1);
+    await page
+      .getByRole("button", { name: "Personeli sil", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Evet, personeli sil", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator("h1")).toHaveText("Personel");
+    expect(
+      (
+        await api.db.query(
+          "select id from employees where name='QA DELETE EMPLOYEE'",
+        )
+      ).rows,
+    ).toHaveLength(0);
+    expect(
+      api.calls.filter((call) => call.path.endsWith("/delete_unused_employee")),
+    ).toHaveLength(1);
     await page.locator(".staff-row").first().click();
+    await expect(page.locator("h1")).toHaveText("Yerel Test Personel");
     await page.getByRole("button", { name: "İşlem Ekle", exact: true }).click();
     await expect(page.getByLabel("Personel", { exact: true })).toHaveValue(
       api.employee,

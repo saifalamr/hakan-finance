@@ -14,6 +14,7 @@ export async function businessDB() {
     "20261004145726_vehicle_documents.sql",
     "20261005100217_safe_vehicle_deletion.sql",
     "20261005131126_fix_vehicle_delete_owner_ambiguity.sql",
+    "20261005173926_complete_safe_entity_deletion.sql",
   ])
     await db.exec(await readFile("supabase/migrations/" + path, "utf8"));
   await db.exec(

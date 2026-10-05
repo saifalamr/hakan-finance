@@ -119,6 +119,11 @@ export async function businessAPI(page: Page, large = false) {
           sql = "select delete_unused_vehicle($1::uuid) value";
           params = [args.p_vehicle];
         }
+        if (name === "delete_unused_employee") {
+          if (holdWrite) await holdWrite;
+          sql = "select delete_unused_employee($1::uuid) value";
+          params = [args.p_employee];
+        }
         if (name === "post_recurring") {
           sql = "select post_recurring($1::uuid,$2::date) value";
           params = [args.p_id, args.p_due];

@@ -331,3 +331,99 @@ test("only unused owned vehicles can be permanently deleted; history and files r
     await db.close();
   }
 });
+
+test("unused employees delete with initial plan; paid, recurring and historical employees stay protected", async () => {
+  const db = await businessDB();
+  try {
+    const create = async (name: string) =>
+      (
+        await db.query<{ id: string }>(
+          "insert into employees(user_id,name,salary,work_days) values($1,$2,3200000,30) returning id",
+          [admin, name],
+        )
+      ).rows[0].id;
+    const remove = async (id: string) =>
+      (
+        await db.query<{ removed: boolean }>(
+          "select delete_unused_employee($1) removed",
+          [id],
+        )
+      ).rows[0].removed;
+    const empty = await create("Unused employee");
+    await assert.rejects(
+      db.query("delete from employees where id=$1", [empty]),
+      /permission denied/,
+    );
+    assert.equal(await remove(empty), true);
+    assert.equal(await remove(empty), false);
+    assert.equal(
+      (
+        await db.query("select id from employee_periods where employee_id=$1", [
+          empty,
+        ])
+      ).rows.length,
+      0,
+    );
+    const paid = await create("Paid employee");
+    const category = (
+      await db.query<{ id: string }>(
+        "select id from categories where name='Personel'",
+      )
+    ).rows[0].id;
+    const period = (
+      await db.query<{ id: string }>(
+        "select id from employee_periods where employee_id=$1",
+        [paid],
+      )
+    ).rows[0].id;
+    await db.query(
+      "insert into transactions(user_id,type,amount,category_id,employee_id,payroll_period_id,payroll_kind,date,deleted_at) values($1,'expense',10000,$2,$3,$4,'advance',current_date,now())",
+      [admin, category, paid, period],
+    );
+    await assert.rejects(remove(paid), /employee_has_history_archive_instead/);
+    assert.equal(
+      (
+        await db.query("select id from transactions where employee_id=$1", [
+          paid,
+        ])
+      ).rows.length,
+      1,
+    );
+    const historical = await create("Previous salary");
+    await db.query(
+      "insert into employee_periods(user_id,employee_id,month,salary,work_days) values($1,$2,(date_trunc('month',now() at time zone 'Europe/Istanbul')-interval '1 month')::date,3200000,30)",
+      [admin, historical],
+    );
+    await assert.rejects(
+      remove(historical),
+      /employee_has_history_archive_instead/,
+    );
+    const edited = await create("Edited plan");
+    await db.query(
+      "update employee_periods set salary=3400000 where employee_id=$1",
+      [edited],
+    );
+    await assert.rejects(
+      remove(edited),
+      /employee_has_history_archive_instead/,
+    );
+    const scheduled = await create("Recurring employee");
+    await db.query(
+      "insert into recurring_expenses(user_id,name,amount,category_id,employee_id,frequency,next_date,anchor_day,anchor_month) values($1,'Maaş',10000,$2,$3,'monthly',current_date,1,1)",
+      [admin, category, scheduled],
+    );
+    await assert.rejects(
+      remove(scheduled),
+      /employee_has_history_archive_instead/,
+    );
+    const other = await create("Another owner");
+    await db.query("select set_config('request.jwt.claim.sub',$1,false)", [
+      outsider,
+    ]);
+    await assert.rejects(remove(other), /administrator_required/);
+    await db.exec("set role anon");
+    await assert.rejects(remove(other), /permission denied/);
+  } finally {
+    await db.close();
+  }
+});

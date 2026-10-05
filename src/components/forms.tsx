@@ -515,13 +515,14 @@ export type EntityModal =
 export function EntityForm({
   modal,
   onClose,
-  onVehicleDeleted,
+  onEntityDeleted,
 }: {
   modal: EntityModal;
   onClose: () => void;
-  onVehicleDeleted?: (id: string) => void;
+  onEntityDeleted?: (type: "vehicle" | "employee", id: string) => void;
 }) {
-  const { save, remove, deleteVehicle, notify, businessReady } = useData();
+  const { save, remove, deleteVehicle, deleteEmployee, notify, businessReady } =
+    useData();
   const requestId = useRef(crypto.randomUUID());
   const submitting = useRef(false);
   const [busy, setBusy] = useState(false),
@@ -614,12 +615,15 @@ export function EntityForm({
     setError("");
     try {
       if (permanent && type === "vehicle") await deleteVehicle(record!.id);
+      else if (permanent && type === "employee")
+        await deleteEmployee(record!.id);
       else await remove(table, record!.id);
       notify(
         `${title} ${type === "category" || permanent ? "silindi" : "arşivlendi"}.`,
       );
       onClose();
-      if (permanent && type === "vehicle") onVehicleDeleted?.(record!.id);
+      if (permanent && (type === "vehicle" || type === "employee"))
+        onEntityDeleted?.(type, record!.id);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -766,13 +770,15 @@ export function EntityForm({
         <button className="button primary full" disabled={busy}>
           {busy ? "Kaydediliyor…" : "Kaydet"}
         </button>
-        {record && type === "vehicle" && (
+        {record && (type === "vehicle" || type === "employee") && (
           <div className="delete-zone">
             {confirmPermanent ? (
               <>
                 <p>
-                  Bu araç kalıcı olarak silinsin mi? İşlem veya belge varsa
-                  silinmez. Bu işlem geri alınamaz.
+                  {type === "vehicle"
+                    ? "Bu araç kalıcı olarak silinsin mi? İşlem veya belge varsa silinmez."
+                    : "Bu personel kalıcı olarak silinsin mi? İşlem veya geçmiş maaş planı varsa silinmez. Kullanılmamış ilk maaş planı da kaldırılır."}{" "}
+                  Bu işlem geri alınamaz.
                 </p>
                 <button
                   type="button"
@@ -780,7 +786,11 @@ export function EntityForm({
                   disabled={busy}
                   onClick={() => void deleteRecord(true)}
                 >
-                  {busy ? "Siliniyor…" : "Evet, aracı sil"}
+                  {busy
+                    ? "Siliniyor…"
+                    : type === "vehicle"
+                      ? "Evet, aracı sil"
+                      : "Evet, personeli sil"}
                 </button>
                 <button
                   type="button"
@@ -802,7 +812,7 @@ export function EntityForm({
                 }}
               >
                 <Trash2 size={15} />
-                Aracı sil
+                {type === "vehicle" ? "Aracı sil" : "Personeli sil"}
               </button>
             )}
           </div>

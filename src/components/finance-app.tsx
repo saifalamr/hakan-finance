@@ -447,9 +447,10 @@ function Shell() {
         <EntityForm
           modal={entityModal}
           onClose={() => setEntityModal(null)}
-          onVehicleDeleted={(id) => {
-            if (section === "araclar" && parts[1] === id)
-              router.replace("/araclar");
+          onEntityDeleted={(type, id) => {
+            const parent = type === "vehicle" ? "araclar" : "personel";
+            if (section === parent && parts[1] === id)
+              router.replace(`/${parent}`);
           }}
         />
       )}
